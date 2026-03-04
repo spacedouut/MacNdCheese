@@ -1,5 +1,7 @@
 MacNCheese
 
+Contact : deepwokenpersona@gmail.com
+
 Introduction
 
 MacNCheese is a method for running DirectX 11 Windows games on Apple Silicon Macs using Wine together with a custom built DXVK that translates DirectX into Vulkan which is then handled through MoltenVK and Metal.
