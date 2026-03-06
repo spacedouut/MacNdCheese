@@ -787,20 +787,10 @@ class MainWindow(QMainWindow):
             return None
 
     def request_admin_env(self) -> Optional[dict[str, str]]:
-        password, ok = QInputDialog.getText(
-            self,
-            APP_NAME,
-            "Enter your macOS password for installation tasks",
-            QLineEdit.EchoMode.Password,
-        )
-        if not ok:
-            return None
-        env = os.environ.copy()
-        env["MNC_SUDO_PASSWORD"] = password
-        return env
+        return os.environ.copy()
 
     def _sudo_script(self, script: str) -> str:
-        return "printf '%s\\n' \"$MNC_SUDO_PASSWORD\" | sudo -Sk -v >/dev/null 2>&1; " + script
+        return script
 
     def _version_tuple(self, value: str) -> tuple[int, ...]:
         cleaned = value.strip().lower().lstrip("v")
@@ -843,16 +833,28 @@ class MainWindow(QMainWindow):
         env = self.request_admin_env()
         if env is None:
             return
-        script = self._sudo_script("brew install git meson ninja mingw-w64 glslang p7zip winetricks")
+        script = "brew install git meson ninja mingw-w64 glslang p7zip winetricks || true"
         self.run_commands([["bash", "-lc", script]], env=env)
 
     def install_wine(self) -> None:
         env = self.request_admin_env()
         if env is None:
             return
-        script = self._sudo_script(
-            "brew install --cask xquartz || true; brew install --cask wine-stable || brew install wine-stable"
-        )
+        script = (
+    "set -e; "
+    "command -v brew >/dev/null 2>&1 || "
+    "(/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"); "
+    "brew install --cask xquartz || true; "
+    "if brew list --cask wine-stable >/dev/null 2>&1; then "
+    "  echo wine-stable already installed; "
+    "elif brew install --cask wine-stable >/dev/null 2>&1; then "
+    "  echo installed wine-stable cask; "
+    "elif brew install wine-stable >/dev/null 2>&1; then "
+    "  echo installed wine-stable formula; "
+    "else "
+    "  brew install wine || true; "
+    "fi"
+)
         self.run_commands([["bash", "-lc", script]], env=env)
 
     def install_mesa(self) -> None:
@@ -893,42 +895,8 @@ class MainWindow(QMainWindow):
 
         src = self.dxvk_src
         if not src.exists():
-            QMessageBox.warning(self, APP_NAME, f"DXVK source folder not found: {src}\n\nFix: set 'DXVK source' to your DXVK-macOS folder (git clone), then try again.")
-            return
-
-        cross64 = src / "build-win64.txt"
-        cross32 = src / "build-win32.txt"
-        if not cross64.exists() or not cross32.exists():
-            QMessageBox.warning(self, APP_NAME, f"DXVK cross files not found in: {src}\nExpected: build-win64.txt and build-win32.txt")
-            return
-
-        install64 = self.dxvk_install
-        install32 = self.dxvk_install32
-
-        script = self._sudo_script(
-            "set -euo pipefail; "
-            "brew install git meson ninja mingw-w64 glslang p7zip winetricks || true; "
-            "brew install --cask xquartz || true; "
-            "brew install --cask wine-stable || brew install wine-stable || true; "
-            f"mkdir -p {shlex.quote(str(install64))} {shlex.quote(str(install32))}; "
-            f"rm -rf {shlex.quote(str(install64 / 'build.64'))} {shlex.quote(str(install32 / 'build.32'))}; "
-            f"meson setup {shlex.quote(str(install64 / 'build.64'))} {shlex.quote(str(src))} --cross-file {shlex.quote(str(cross64))} --prefix {shlex.quote(str(install64))} --buildtype release -Denable_d3d9=false; "
-            f"ninja -C {shlex.quote(str(install64 / 'build.64'))}; "
-            f"ninja -C {shlex.quote(str(install64 / 'build.64'))} install; "
-            f"meson setup {shlex.quote(str(install32 / 'build.32'))} {shlex.quote(str(src))} --cross-file {shlex.quote(str(cross32))} --prefix {shlex.quote(str(install32))} --buildtype release -Denable_d3d9=false; "
-            f"ninja -C {shlex.quote(str(install32 / 'build.32'))}; "
-            f"ninja -C {shlex.quote(str(install32 / 'build.32'))} install; "
-            f"cd ~; rm -rf mesa mesa.7z; curl -L -o mesa.7z {shlex.quote(DEFAULT_MESA_URL)}; mkdir -p mesa; 7z x mesa.7z -omesa >/dev/null; "
-            "if [ ! -d ~/mesa/x64 ] && ls -1 ~/mesa | grep -q mesa3d-; then "
-            "  sub=$(ls -1 ~/mesa | grep mesa3d- | head -n1); "
-            "  if [ -d ~/mesa/$sub/x64 ]; then "
-            "    rm -rf ~/mesa/x64; "
-            "    cp -R ~/mesa/$sub/x64 ~/mesa/x64; "
-            "  fi; "
-            "fi"
-        )
-
-        self.run_commands([["bash", "-lc", script]], env=env, cwd=str(src))
+            self.log("DXVK source not found, cloning automatically")
+            subprocess.run(["git", "clone", "https://github.com/Gcenx/DXVK-macOS.git", str(src)], check=False)
 
     def _build_dxvk(self, *, arch: str) -> None:
         wine = self.ensure_wine()
