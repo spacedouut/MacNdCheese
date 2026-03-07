@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
@@ -8,6 +9,8 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.request
+import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
@@ -22,6 +25,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -37,6 +41,10 @@ from PyQt6.QtWidgets import (
 
 
 APP_NAME = "MacNCheese"
+APP_VERSION = "v2.0.0"
+GITHUB_REPO = "mont127/MacNdCheese"
+GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 DEFAULT_PREFIX = str(Path.home() / "wined")
 DEFAULT_DXVK_SRC = str(Path.home() / "DXVK-macOS")
 DEFAULT_DXVK_INSTALL = str(Path.home() / "dxvk-release")
@@ -84,7 +92,6 @@ class GameEntry:
         if not self.game_dir.exists():
             return None
 
-        
         try:
             shipping = sorted(
                 self.game_dir.glob("**/*-Shipping.exe"),
@@ -96,7 +103,6 @@ class GameEntry:
         except Exception:
             pass
 
-       
         candidates: list[Path] = []
         for name in (
             f"{self.install_dir_name}.exe",
@@ -108,7 +114,6 @@ class GameEntry:
             if p.exists():
                 candidates.append(p)
 
-       
         def _is_probably_not_game(exe: Path) -> bool:
             lowered = exe.name.lower()
             bad_tokens = (
@@ -127,7 +132,6 @@ class GameEntry:
         root_exes = sorted(self.game_dir.glob("*.exe"), key=lambda p: p.stat().st_size, reverse=True)
         candidates.extend([p for p in root_exes if not _is_probably_not_game(p)])
 
-      
         sub_exes: list[Path] = []
         patterns = [
             "*/*.exe",
@@ -143,8 +147,6 @@ class GameEntry:
                 if exe.is_file() and not _is_probably_not_game(exe):
                     sub_exes.append(exe)
 
-       
-       
         shipping = [p for p in sub_exes if "shipping.exe" in p.name.lower()]
         shipping.sort(key=lambda p: p.stat().st_size if p.exists() else 0, reverse=True)
         if shipping:
@@ -153,7 +155,6 @@ class GameEntry:
         sub_exes.sort(key=lambda p: p.stat().st_size, reverse=True)
         candidates.extend(sub_exes)
 
-       
         for exe in candidates:
             try:
                 if exe.exists() and exe.is_file():
@@ -165,6 +166,103 @@ class GameEntry:
 
     def display(self) -> str:
         return f"{self.name} [{self.appid}]"
+
+    def detect_exes(self) -> list[Path]:
+        if not self.game_dir.exists():
+            return []
+
+        def _is_probably_not_game(exe: Path) -> bool:
+            lowered = exe.name.lower()
+            bad_tokens = (
+                "unitycrashhandler",
+                "crashhandler",
+                "unins",
+                "uninstall",
+                "setup",
+                "launcherhelper",
+                "steamerrorreporter",
+                "vcredist",
+                "dxsetup",
+            )
+            return any(t in lowered for t in bad_tokens)
+
+        seen: set[str] = set()
+        candidates: list[Path] = []
+
+        preferred_names = (
+            "Launcher.exe",
+            "launcher.exe",
+            "WarframeLauncher.exe",
+            "Launcher_x64.exe",
+        )
+        for name in preferred_names:
+            for exe in self.game_dir.glob(f"**/{name}"):
+                if exe.is_file() and str(exe) not in seen:
+                    seen.add(str(exe))
+                    candidates.append(exe)
+
+        try:
+            shipping = sorted(
+                self.game_dir.glob("**/*-Shipping.exe"),
+                key=lambda p: p.stat().st_size if p.exists() else 0,
+                reverse=True,
+            )
+            for exe in shipping:
+                if str(exe) not in seen:
+                    seen.add(str(exe))
+                    candidates.append(exe)
+        except Exception:
+            pass
+
+        for name in (
+            f"{self.install_dir_name}.exe",
+            f"{self.name}.exe",
+            f"{self.name.replace(' ', '')}.exe",
+            f"{self.install_dir_name.replace(' ', '')}.exe",
+        ):
+            p = self.game_dir / name
+            if p.exists() and p.is_file() and not _is_probably_not_game(p) and str(p) not in seen:
+                seen.add(str(p))
+                candidates.append(p)
+
+        try:
+            root_exes = sorted(self.game_dir.glob("*.exe"), key=lambda p: p.stat().st_size, reverse=True)
+            for p in root_exes:
+                if not _is_probably_not_game(p) and str(p) not in seen:
+                    seen.add(str(p))
+                    candidates.append(p)
+        except Exception:
+            pass
+
+        patterns = [
+            "*/*.exe",
+            "*/*/*.exe",
+            "*/*/*/*.exe",
+            "*/*/*/*/*.exe",
+            "*/*/*/*/*/*.exe",
+            "*/*/*/*/*/*/*.exe",
+            "*/*/*/*/*/*/*/*.exe",
+        ]
+        sub_exes: list[Path] = []
+        for pat in patterns:
+            try:
+                for exe in self.game_dir.glob(pat):
+                    if exe.is_file() and not _is_probably_not_game(exe):
+                        sub_exes.append(exe)
+            except Exception:
+                pass
+
+        try:
+            sub_exes.sort(key=lambda p: p.stat().st_size, reverse=True)
+        except Exception:
+            pass
+
+        for exe in sub_exes:
+            if str(exe) not in seen:
+                seen.add(str(exe))
+                candidates.append(exe)
+
+        return candidates
 
 
 class CommandWorker(QObject):
@@ -294,6 +392,7 @@ class MainWindow(QMainWindow):
         self.games: list[GameEntry] = []
         self.last_game_launch_ts: dict[str, float] = {}
         self.last_game_wine_log: dict[str, Path] = {}
+        self.selected_startup_exes: dict[str, Path] = {}
         self.simple_ui_enabled: bool = False
         self.dev_ui_enabled: bool = False
 
@@ -302,6 +401,10 @@ class MainWindow(QMainWindow):
         self.log(f"{APP_NAME} ready")
 
     def _build_menu(self) -> None:
+        check_updates_action = QAction("Check for Updates", self)
+        check_updates_action.triggered.connect(self.check_for_updates)
+        self.menuBar().addAction(check_updates_action)
+
         exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.close)
         self.menuBar().addAction(exit_action)
@@ -379,6 +482,10 @@ class MainWindow(QMainWindow):
         self.quick_setup_btn.clicked.connect(self.quick_setup)
         quick_layout.addWidget(self.quick_setup_btn)
 
+        self.check_updates_btn = QPushButton("Check for Updates")
+        self.check_updates_btn.clicked.connect(self.check_for_updates)
+        quick_layout.addWidget(self.check_updates_btn)
+
         quick_hint = QLabel("Installs tools, Wine, builds DXVK (64/32), then installs Mesa")
         quick_hint.setWordWrap(True)
         quick_layout.addWidget(quick_hint)
@@ -433,33 +540,36 @@ class MainWindow(QMainWindow):
         self.patch_dxvk_btn.clicked.connect(self.patch_selected_game)
         self.launch_game_btn = QPushButton("Launch Selected Game")
         self.launch_game_btn.clicked.connect(self.launch_selected_game)
+        self.select_startup_exe_btn = QPushButton("Select Startup EXE")
+        self.select_startup_exe_btn.clicked.connect(self.select_startup_exe_for_selected_game)
 
         runtime_grid.addWidget(self.launch_steam_btn, 0, 0)
         runtime_grid.addWidget(self.scan_games_btn, 0, 1)
         runtime_grid.addWidget(self.patch_dxvk_btn, 1, 0)
         runtime_grid.addWidget(self.launch_game_btn, 1, 1)
+        runtime_grid.addWidget(self.select_startup_exe_btn, 2, 0, 1, 2)
 
         self.show_dxvk_log_btn = QPushButton("Show DXVK Log")
         self.show_dxvk_log_btn.clicked.connect(self.show_dxvk_log_for_selected_game)
-        runtime_grid.addWidget(self.show_dxvk_log_btn, 2, 0, 1, 2)
+        runtime_grid.addWidget(self.show_dxvk_log_btn, 3, 0, 1, 2)
 
         self.game_args_edit = QLineEdit("")
         self.game_args_edit.setPlaceholderText(
             "Extra game args (optional). Example: -screen-fullscreen 0 -screen-width 1280 -screen-height 720"
         )
-        runtime_grid.addWidget(QLabel("Game args"), 3, 0)
-        runtime_grid.addWidget(self.game_args_edit, 3, 1)
+        runtime_grid.addWidget(QLabel("Game args"), 4, 0)
+        runtime_grid.addWidget(self.game_args_edit, 4, 1)
 
         self.launch_backend_combo = QComboBox()
         for label, value in LAUNCH_BACKENDS:
             self.launch_backend_combo.addItem(label, value)
         self.launch_backend_combo.setCurrentIndex(0)
-        runtime_grid.addWidget(QLabel("Launch backend"), 4, 0)
-        runtime_grid.addWidget(self.launch_backend_combo, 4, 1)
+        runtime_grid.addWidget(QLabel("Launch backend"), 5, 0)
+        runtime_grid.addWidget(self.launch_backend_combo, 5, 1)
 
         self.show_player_log_btn = QPushButton("Show Unity Player.log")
         self.show_player_log_btn.clicked.connect(self.show_unity_player_log_for_selected_game)
-        runtime_grid.addWidget(self.show_player_log_btn, 5, 0, 1, 2)
+        runtime_grid.addWidget(self.show_player_log_btn, 6, 0, 1, 2)
 
         left_layout.addWidget(runtime_box)
         self._runtime_box = runtime_box
@@ -676,33 +786,85 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, APP_NAME, msg)
             return None
 
+    def request_admin_env(self) -> Optional[dict[str, str]]:
+        return os.environ.copy()
+
+    def _sudo_script(self, script: str) -> str:
+        return script
+
+    def _version_tuple(self, value: str) -> tuple[int, ...]:
+        cleaned = value.strip().lower().lstrip("v")
+        parts: list[int] = []
+        for part in cleaned.split("."):
+            digits = "".join(ch for ch in part if ch.isdigit())
+            parts.append(int(digits or 0))
+        return tuple(parts)
+
+    def check_for_updates(self) -> None:
+        try:
+            req = urllib.request.Request(
+                GITHUB_LATEST_RELEASE_API,
+                headers={"Accept": "application/vnd.github+json", "User-Agent": APP_NAME},
+            )
+            with urllib.request.urlopen(req, timeout=8) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            latest_tag = str(payload.get("tag_name") or "").strip()
+            release_url = str(payload.get("html_url") or GITHUB_RELEASES_URL)
+            if not latest_tag:
+                raise ValueError("GitHub did not return a latest release tag")
+            if self._version_tuple(latest_tag) > self._version_tuple(APP_VERSION):
+                answer = QMessageBox.question(
+                    self,
+                    APP_NAME,
+                    f"A newer version is available.\n\nCurrent: {APP_VERSION}\nLatest: {latest_tag}\n\nOpen the release page?",
+                )
+                if answer == QMessageBox.StandardButton.Yes:
+                    webbrowser.open(release_url)
+                return
+            QMessageBox.information(
+                self,
+                APP_NAME,
+                f"You are up to date.\n\nCurrent version: {APP_VERSION}",
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, APP_NAME, f"Update check failed: {exc}")
+
     def install_tools(self) -> None:
-        self.run_commands(
-            [["bash", "-lc", "brew install git meson ninja mingw-w64 glslang p7zip winetricks"]]
-        )
+        env = self.request_admin_env()
+        if env is None:
+            return
+        script = "brew install git meson ninja mingw-w64 glslang p7zip winetricks || true"
+        self.run_commands([["bash", "-lc", script]], env=env)
 
     def install_wine(self) -> None:
-       
-        self.run_commands(
-            [
-                [
-                    "bash",
-                    "-lc",
-                    "brew install --cask xquartz || true; brew install --cask wine-stable || brew install wine-stable",
-                ]
-            ]
-        )
+        env = self.request_admin_env()
+        if env is None:
+            return
+        script = (
+    "set -e; "
+    "command -v brew >/dev/null 2>&1 || "
+    "(/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"); "
+    "brew install --cask xquartz || true; "
+    "if brew list --cask wine-stable >/dev/null 2>&1; then "
+    "  echo wine-stable already installed; "
+    "elif brew install --cask wine-stable >/dev/null 2>&1; then "
+    "  echo installed wine-stable cask; "
+    "elif brew install wine-stable >/dev/null 2>&1; then "
+    "  echo installed wine-stable formula; "
+    "else "
+    "  brew install wine || true; "
+    "fi"
+)
+        self.run_commands([["bash", "-lc", script]], env=env)
 
     def install_mesa(self) -> None:
-        """Download and extract Mesa (Windows build) into ~/mesa.
-
-        Provides opengl32.dll/libgallium_wgl.dll/libglapi.dll under ~/mesa/x64 which can be copied
-        next to an OpenGL-first game's EXE for Wine.
-        """
+        env = self.request_admin_env()
+        if env is None:
+            return
         url = DEFAULT_MESA_URL
 
         commands: list[list[str]] = [
-            ["bash", "-lc", "brew install p7zip || true"],
+            ["bash", "-lc", self._sudo_script("brew install p7zip || true")],
             [
                 "bash",
                 "-lc",
@@ -713,7 +875,6 @@ class MainWindow(QMainWindow):
                     f"curl -L -o mesa.7z {shlex.quote(url)}; "
                     "mkdir -p mesa; "
                     "7z x mesa.7z -omesa >/dev/null; "
-                   
                     "if [ ! -d ~/mesa/x64 ] && ls -1 ~/mesa | grep -q mesa3d-; then "
                     "  sub=$(ls -1 ~/mesa | grep mesa3d- | head -n1); "
                     "  if [ -d ~/mesa/$sub/x64 ]; then "
@@ -725,47 +886,17 @@ class MainWindow(QMainWindow):
             ],
         ]
 
-        self.run_commands(commands)
+        self.run_commands(commands, env=env)
 
     def quick_setup(self) -> None:
+        env = self.request_admin_env()
+        if env is None:
+            return
+
         src = self.dxvk_src
         if not src.exists():
-            QMessageBox.warning(self, APP_NAME, f"DXVK source folder not found: {src}\n\nFix: set 'DXVK source' to your DXVK-macOS folder (git clone), then try again.")
-            return
-
-        cross64 = src / "build-win64.txt"
-        cross32 = src / "build-win32.txt"
-        if not cross64.exists() or not cross32.exists():
-            QMessageBox.warning(self, APP_NAME, f"DXVK cross files not found in: {src}\nExpected: build-win64.txt and build-win32.txt")
-            return
-
-        install64 = self.dxvk_install
-        install32 = self.dxvk_install32
-
-        script = (
-            "set -euo pipefail; "
-            "brew install git meson ninja mingw-w64 glslang p7zip winetricks || true; "
-            "brew install --cask xquartz || true; "
-            "brew install --cask wine-stable || brew install wine-stable || true; "
-            f"mkdir -p {shlex.quote(str(install64))} {shlex.quote(str(install32))}; "
-            f"rm -rf {shlex.quote(str(install64 / 'build.64'))} {shlex.quote(str(install32 / 'build.32'))}; "
-            f"meson setup {shlex.quote(str(install64 / 'build.64'))} {shlex.quote(str(src))} --cross-file {shlex.quote(str(cross64))} --prefix {shlex.quote(str(install64))} --buildtype release -Denable_d3d9=false; "
-            f"ninja -C {shlex.quote(str(install64 / 'build.64'))}; "
-            f"ninja -C {shlex.quote(str(install64 / 'build.64'))} install; "
-            f"meson setup {shlex.quote(str(install32 / 'build.32'))} {shlex.quote(str(src))} --cross-file {shlex.quote(str(cross32))} --prefix {shlex.quote(str(install32))} --buildtype release -Denable_d3d9=false; "
-            f"ninja -C {shlex.quote(str(install32 / 'build.32'))}; "
-            f"ninja -C {shlex.quote(str(install32 / 'build.32'))} install; "
-            f"cd ~; rm -rf mesa mesa.7z; curl -L -o mesa.7z {shlex.quote(DEFAULT_MESA_URL)}; mkdir -p mesa; 7z x mesa.7z -omesa >/dev/null; "
-            "if [ ! -d ~/mesa/x64 ] && ls -1 ~/mesa | grep -q mesa3d-; then "
-            "  sub=$(ls -1 ~/mesa | grep mesa3d- | head -n1); "
-            "  if [ -d ~/mesa/$sub/x64 ]; then "
-            "    rm -rf ~/mesa/x64; "
-            "    cp -R ~/mesa/$sub/x64 ~/mesa/x64; "
-            "  fi; "
-            "fi"
-        )
-
-        self.run_commands([["bash", "-lc", script]], env=None, cwd=str(src))
+            self.log("DXVK source not found, cloning automatically")
+            subprocess.run(["git", "clone", "https://github.com/Gcenx/DXVK-macOS.git", str(src)], check=False)
 
     def _build_dxvk(self, *, arch: str) -> None:
         wine = self.ensure_wine()
@@ -1105,11 +1236,62 @@ class MainWindow(QMainWindow):
             return None
         return item.data(256)
 
+    def selected_game_exe(self, game: GameEntry) -> Optional[Path]:
+        chosen = self.selected_startup_exes.get(game.appid)
+        if chosen and chosen.exists() and chosen.is_file():
+            return chosen
+        return game.detect_exe()
+
+    def select_startup_exe_for_selected_game(self) -> None:
+        game = self.selected_game()
+        if not game:
+            QMessageBox.warning(self, APP_NAME, "Select a game first.")
+            return
+
+        exe_candidates = game.detect_exes()
+        labels: list[str] = []
+        mapping: dict[str, Path] = {}
+        for exe in exe_candidates:
+            try:
+                rel = str(exe.relative_to(game.game_dir))
+            except Exception:
+                rel = str(exe)
+            label = f"{rel}"
+            labels.append(label)
+            mapping[label] = exe
+
+        if not labels:
+            QMessageBox.warning(self, APP_NAME, f"No EXE files found in {game.game_dir}")
+            return
+
+        current = self.selected_startup_exes.get(game.appid)
+        current_label = None
+        if current:
+            for label, path in mapping.items():
+                if path == current:
+                    current_label = label
+                    break
+
+        current_index = labels.index(current_label) if current_label in labels else 0
+        choice, ok = QInputDialog.getItem(
+            self,
+            APP_NAME,
+            f"Select startup EXE for {game.name}",
+            labels,
+            current_index,
+            False,
+        )
+        if not ok or not choice:
+            return
+
+        self.selected_startup_exes[game.appid] = mapping[choice]
+        self.set_status(f"Startup EXE set for {game.name}: {choice}")
+
     def update_selected_game_status(self) -> None:
         game = self.selected_game()
         if not game:
             return
-        exe = game.detect_exe()
+        exe = self.selected_game_exe(game)
         self.set_status(
             f"Selected: {game.name} | Folder: {game.game_dir} | EXE: {exe.name if exe else 'not found'}"
         )
@@ -1120,7 +1302,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, APP_NAME, "Select a game first.")
             return
 
-        exe = game.detect_exe()
+        exe = self.selected_game_exe(game)
         dxvk_bin = self.dxvk_bin_for_exe(exe) if exe is not None else (self.dxvk_install / "bin")
         for dll in DXVK_DLLS:
             if not (dxvk_bin / dll).exists():
@@ -1175,7 +1357,7 @@ class MainWindow(QMainWindow):
         wine = self.ensure_wine()
         if not wine:
             return
-        exe = game.detect_exe()
+        exe = self.selected_game_exe(game)
         if not exe:
             
             try:
@@ -1217,10 +1399,8 @@ class MainWindow(QMainWindow):
                 effective_mesa_driver = self.mesa_driver_from_backend(effective_backend)
                 effective_mesa_driver = self.patch_selected_game_with_mesa(game, exe, driver=effective_mesa_driver)
             elif effective_backend == LAUNCH_BACKEND_DXVK:
-               
                 self.patch_selected_game()
             else:
-                
                 pass
         except Exception as exc:
             QMessageBox.warning(self, APP_NAME, str(exc))
@@ -1235,7 +1415,6 @@ class MainWindow(QMainWindow):
         if self.backend_is_mesa(effective_backend):
             env["GALLIUM_DRIVER"] = effective_mesa_driver
             env["WINEDLLOVERRIDES"] = "opengl32=n,b"
-            
             env["MESA_GLTHREAD"] = "true"
             env.pop("DXVK_LOG_PATH", None)
             env.pop("DXVK_LOG_LEVEL", None)
@@ -1245,7 +1424,6 @@ class MainWindow(QMainWindow):
             env["DXVK_LOG_LEVEL"] = "info"
             Path(env["DXVK_LOG_PATH"]).mkdir(parents=True, exist_ok=True)
         else:
-            
             env["WINEDLLOVERRIDES"] = "dxgi,d3d11,d3d10core=b"
             env.pop("DXVK_LOG_PATH", None)
             env.pop("DXVK_LOG_LEVEL", None)
