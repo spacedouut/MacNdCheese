@@ -1,7 +1,7 @@
-
-
 #!/bin/sh
 set -eu
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
 ACTION="${1:-}"
 PREFIX_DIR="${2:-}"
@@ -11,22 +11,31 @@ DXVK_INSTALL32="${5:-}"
 MESA_DIR="${6:-}"
 MESA_URL="${7:-}"
 
+XQUARTZ_URL="https://github.com/XQuartz/XQuartz/releases/download/XQuartz-2.8.5/XQuartz-2.8.5.pkg"
+GSTREAMER_URL="https://gstreamer.freedesktop.org/data/pkg/osx/1.28.1/gstreamer-1.0-1.28.1-universal.pkg"
+WINE_STABLE_URL="https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.0/wine-stable-11.0-osx64.tar.xz"
+WORK_DIR="$(mktemp -d /tmp/macncheese-installer.XXXXXX)"
+BREW_BIN=""
+trap 'stop_sudo_keepalive; rm -rf "$WORK_DIR"' EXIT
+
 if [ -z "$ACTION" ]; then
   echo "Missing action"
   exit 1
 fi
 
-if command -v brew >/dev/null 2>&1; then
-  eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null || true)"
+echo "Starting installer action: $ACTION"
+
+if [ -x /opt/homebrew/bin/brew ]; then
+  BREW_BIN="/opt/homebrew/bin/brew"
+elif [ -x /usr/local/bin/brew ]; then
+  BREW_BIN="/usr/local/bin/brew"
+elif command -v brew >/dev/null 2>&1; then
+  BREW_BIN="$(command -v brew)"
 fi
 
-ensure_brew() {
-  if ! command -v brew >/dev/null 2>&1; then
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null || true)"
-  fi
-  brew update || true
-}
+if [ -n "$BREW_BIN" ]; then
+  eval "$($BREW_BIN shellenv 2>/dev/null || true)"
+fi
 
 sudo_run() {
   if [ -n "${MNC_SUDO_PASSWORD:-}" ]; then
@@ -36,44 +45,140 @@ sudo_run() {
   fi
 }
 
+is_admin_user() {
+  if command -v dseditgroup >/dev/null 2>&1; then
+    dseditgroup -o checkmember -m "$USER" admin >/dev/null 2>&1
+    return $?
+  fi
+  groups | grep -Eq '(^| )admin( |$)'
+}
+
+require_admin() {
+  if ! is_admin_user; then
+    echo "This macOS user is not an Administrator. MacNCheese setup needs an admin account on a new Mac."
+    exit 1
+  fi
+}
+
+prime_sudo() {
+  require_admin
+  if [ -n "${MNC_SUDO_PASSWORD:-}" ]; then
+    printf '%s\n' "$MNC_SUDO_PASSWORD" | sudo -S -k -v >/dev/null 2>&1 || {
+      echo "The macOS password was rejected."
+      exit 1
+    }
+  else
+    sudo -v || {
+      echo "Administrator access is required."
+      exit 1
+    }
+  fi
+}
+
+start_sudo_keepalive() {
+  if [ -n "${MNC_SUDO_PASSWORD:-}" ]; then
+    (
+      trap 'exit 0' TERM INT HUP
+      while true; do
+        printf '%s\n' "$MNC_SUDO_PASSWORD" | "$REAL_SUDO" -S -n -v >/dev/null 2>&1 || true
+        sleep 20
+      done
+    ) >/dev/null 2>&1 &
+    SUDO_KEEPALIVE_PID=$!
+  fi
+}
+
+stop_sudo_keepalive() {
+  if [ -n "${SUDO_KEEPALIVE_PID:-}" ]; then
+    kill "$SUDO_KEEPALIVE_PID" >/dev/null 2>&1 || true
+    wait "$SUDO_KEEPALIVE_PID" >/dev/null 2>&1 || true
+  fi
+}
+
+ensure_clt() {
+  prime_sudo
+  if xcode-select -p >/dev/null 2>&1; then
+    return
+  fi
+  echo "Xcode Command Line Tools missing, trying softwareupdate"
+  touch /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress || true
+  product="$(softwareupdate -l 2>/dev/null | awk -F'*' '/Command Line Tools/ {print $2}' | sed 's/^ *//' | tail -n1)"
+  rm -f /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress || true
+  if [ -n "$product" ]; then
+    sudo_run softwareupdate -i "$product" --verbose || true
+  fi
+  if ! xcode-select -p >/dev/null 2>&1; then
+    xcode-select --install >/dev/null 2>&1 || true
+    echo "Xcode Command Line Tools are required. Finish the macOS CLT install, then retry."
+    exit 1
+  fi
+}
+
+ensure_brew() {
+  ensure_clt
+  if [ -z "$BREW_BIN" ]; then
+    prime_sudo
+    start_sudo_keepalive
+    NONINTERACTIVE=1 CI=1 HOMEBREW_NO_ANALYTICS=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    if [ -x /opt/homebrew/bin/brew ]; then
+      BREW_BIN="/opt/homebrew/bin/brew"
+    elif [ -x /usr/local/bin/brew ]; then
+      BREW_BIN="/usr/local/bin/brew"
+    else
+      echo "Homebrew install finished but brew was not found"
+      exit 1
+    fi
+    eval "$($BREW_BIN shellenv 2>/dev/null || true)"
+  fi
+  echo "Using brew: $BREW_BIN"
+  "$BREW_BIN" update || true
+}
+
+download_file() {
+  url="$1"
+  out="$2"
+  curl -L --fail --retry 3 --retry-delay 2 -o "$out" "$url"
+}
+
+install_pkg_url() {
+  url="$1"
+  name="$2"
+  pkg_path="$WORK_DIR/$name"
+  echo "Installing pkg: $name"
+  download_file "$url" "$pkg_path"
+  prime_sudo
+  sudo_run /usr/sbin/installer -pkg "$pkg_path" -target /
+}
+
 ensure_rosetta() {
   if /usr/bin/pgrep oahd >/dev/null 2>&1 || /usr/sbin/pkgutil --pkgs | grep -q com.apple.pkg.RosettaUpdateAuto; then
     echo "Rosetta already available"
   else
+    echo "Installing Rosetta"
+    prime_sudo
     sudo_run /usr/sbin/softwareupdate --install-rosetta --agree-to-license || true
+  fi
+}
+
+install_xquartz_pkg() {
+  if pkgutil --pkgs | grep -qi xquartz; then
+    echo "XQuartz already installed"
+  else
+    install_pkg_url "$XQUARTZ_URL" "XQuartz.pkg"
+  fi
+}
+
+install_gstreamer_pkg() {
+  if [ -d "/Library/Frameworks/GStreamer.framework" ]; then
+    echo "GStreamer runtime already installed"
+  else
+    install_pkg_url "$GSTREAMER_URL" "gstreamer-runtime.pkg"
   fi
 }
 
 install_tools() {
   ensure_brew
-  brew install git meson ninja mingw-w64 glslang p7zip winetricks || true
-}
-
-install_wine() {
-  ensure_brew
-  if ! pkgutil --pkgs | grep -qi xquartz; then
-    if brew info --cask xquartz >/dev/null 2>&1; then
-      brew install --cask xquartz || true
-    fi
-  fi
-  ensure_rosetta
-  if brew list --cask gstreamer-runtime >/dev/null 2>&1; then
-    echo "gstreamer-runtime already installed"
-  elif brew info --cask gstreamer-runtime >/dev/null 2>&1; then
-    brew install --cask gstreamer-runtime || true
-  fi
-  if brew list --cask wine-stable >/dev/null 2>&1; then
-    echo "wine-stable cask already installed"
-  elif brew info --cask wine-stable >/dev/null 2>&1; then
-    brew install --cask wine-stable
-  elif brew list wine >/dev/null 2>&1; then
-    echo "wine formula already installed"
-  elif brew info wine >/dev/null 2>&1; then
-    brew install wine
-  else
-    echo "Could not install Wine from Homebrew"
-    exit 1
-  fi
+  "$BREW_BIN" install git meson ninja mingw-w64 glslang p7zip winetricks || true
 }
 
 clone_dxvk_if_missing() {
@@ -82,12 +187,56 @@ clone_dxvk_if_missing() {
     exit 1
   fi
   if [ ! -d "$DXVK_SRC" ]; then
+    echo "Cloning DXVK-macOS into $DXVK_SRC"
     mkdir -p "$(dirname "$DXVK_SRC")"
     git clone https://github.com/Gcenx/DXVK-macOS.git "$DXVK_SRC"
   fi
   if [ ! -f "$DXVK_SRC/build-win64.txt" ] || [ ! -f "$DXVK_SRC/build-win32.txt" ]; then
     echo "DXVK cross files not found in $DXVK_SRC"
     exit 1
+  fi
+}
+
+install_wine_bundle() {
+  prime_sudo
+  archive="$WORK_DIR/wine-stable.tar.xz"
+  unpack_dir="$WORK_DIR/wine-app"
+  rm -rf "$unpack_dir"
+  mkdir -p "$unpack_dir"
+  echo "Installing Wine bundle fallback"
+  download_file "$WINE_STABLE_URL" "$archive"
+  tar -xJf "$archive" -C "$unpack_dir"
+  app_path="$(find "$unpack_dir" -maxdepth 2 -type d -name "Wine*.app" | head -n1)"
+  if [ -z "$app_path" ]; then
+    echo "Failed to unpack Wine app bundle"
+    exit 1
+  fi
+  app_name="$(basename "$app_path")"
+  sudo_run rm -rf "/Applications/$app_name"
+  sudo_run cp -R "$app_path" "/Applications/$app_name"
+  sudo_run xattr -dr com.apple.quarantine "/Applications/$app_name" || true
+  sudo_run mkdir -p /usr/local/bin
+  sudo_run ln -sf "/Applications/$app_name/Contents/Resources/wine/bin/wine" /usr/local/bin/wine
+  sudo_run ln -sf "/Applications/$app_name/Contents/Resources/wine/bin/wineserver" /usr/local/bin/wineserver
+}
+
+install_wine() {
+  ensure_brew
+  install_xquartz_pkg
+  ensure_rosetta
+  install_gstreamer_pkg
+  if "$BREW_BIN" list --cask wine-stable >/dev/null 2>&1; then
+    echo "wine-stable cask already installed"
+  elif "$BREW_BIN" info --cask wine-stable >/dev/null 2>&1; then
+    echo "Installing wine-stable cask"
+    "$BREW_BIN" install --cask --no-quarantine wine-stable || install_wine_bundle
+  elif "$BREW_BIN" list wine >/dev/null 2>&1; then
+    echo "wine formula already installed"
+  elif "$BREW_BIN" info wine >/dev/null 2>&1; then
+    echo "Installing wine formula"
+    "$BREW_BIN" install wine || install_wine_bundle
+  else
+    install_wine_bundle
   fi
 }
 
@@ -111,7 +260,7 @@ build_dxvk32() {
 
 install_mesa() {
   ensure_brew
-  brew install p7zip || true
+  "$BREW_BIN" install p7zip || true
   cd "$HOME"
   rm -rf mesa mesa.7z
   curl -L -o mesa.7z "$MESA_URL"
@@ -139,6 +288,10 @@ init_prefix() {
     /opt/homebrew/bin/wine wineboot
   elif [ -x /usr/local/bin/wine ]; then
     /usr/local/bin/wine wineboot
+  elif [ -x "/Applications/Wine Stable.app/Contents/Resources/wine/bin/wine" ]; then
+    "/Applications/Wine Stable.app/Contents/Resources/wine/bin/wine" wineboot
+  elif [ -x "/Applications/Wine Staging.app/Contents/Resources/wine/bin/wine" ]; then
+    "/Applications/Wine Staging.app/Contents/Resources/wine/bin/wine" wineboot
   else
     echo "wine not found"
     exit 1
@@ -153,6 +306,8 @@ quick_setup() {
   install_mesa
 }
 
+prime_sudo
+start_sudo_keepalive
 case "$ACTION" in
   install_tools)
     install_tools
