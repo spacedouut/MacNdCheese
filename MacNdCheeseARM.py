@@ -19,9 +19,8 @@ from typing import Iterable, Optional, Any
 import AVFoundation as AV
 
 
-
 from PyQt6.QtGui import QAction, QPixmap, QPainter, QIcon
-from PyQt6.QtCore import QObject, QProcess, QProcessEnvironment, QThread, pyqtSignal, QPoint, QRect, QSize, Qt, QEvent, QTimer
+from PyQt6.QtCore import QObject, QProcess, QProcessEnvironment, QThread, pyqtSignal, QPoint, QRect, QSize, Qt, QEvent, QTimer, QPropertyAnimation, QEasingCurve
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -227,9 +226,14 @@ class SettingsDialog(QDialog):
         row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(combo, 1)
 
-        btn_remove = QPushButton("Remove")
+        btn_remove = QPushButton("Remove from List")
         btn_remove.clicked.connect(self._remove_prefix)
         row.addWidget(btn_remove)
+
+        btn_delete = QPushButton("Delete Disk")
+        btn_delete.setStyleSheet("color: #FF6666;")
+        btn_delete.clicked.connect(self._delete_prefix_disk)
+        row.addWidget(btn_delete)
 
         btn_browse = QPushButton("Browse")
         btn_browse.clicked.connect(self._pick_prefix_dir)
@@ -238,10 +242,41 @@ class SettingsDialog(QDialog):
         return wrap
 
     def _remove_prefix(self) -> None:
+        path_str = self.prefix_combo.currentText()
         idx = self.prefix_combo.currentIndex()
         if idx >= 0:
             self.prefix_combo.removeItem(idx)
         self._save_current_prefixes()
+        
+        parent = self.parent()
+        if parent and hasattr(parent, "remove_sidebar_button_for_prefix"):
+            parent.remove_sidebar_button_for_prefix(path_str)
+
+    def _delete_prefix_disk(self) -> None:
+        path_str = self.prefix_combo.currentText()
+        if not path_str:
+            return
+        p = Path(path_str)
+        if not p.exists():
+            QMessageBox.warning(self, "Delete Prefix", f"Prefix does not exist on disk:\n{p}")
+            self._remove_prefix()
+            return
+            
+        reply = QMessageBox.question(
+            self,
+            "Delete Prefix",
+            f"Are you sure you want to PERMANENTLY delete this prefix and all of its contents (games, saves, etc)?\n\n{p}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                import shutil
+                shutil.rmtree(p)
+                QMessageBox.information(self, "Deleted", "Prefix deleted successfully.")
+                self._remove_prefix()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to delete prefix:\n{e}")
 
     def _pick_prefix_dir(self) -> None:
         chosen = QFileDialog.getExistingDirectory(self, "Select prefix folder", self.prefix_combo.currentText())
@@ -396,16 +431,18 @@ QMainWindow, QDialog {
     background-color: #283141;
 }
 
-
 #Sidebar {
     background-color: #1F2633;
-    border-right: 1px solid #161D29;
+    border: none;
+}
+QLabel {
+    background-color: transparent;
 }
 
 #SidebarButton {
     background-color: transparent;
     border: none;
-    border-radius: 8px;
+    border-radius: 12px;
     padding: 6px 4px 4px 4px;
     margin: 2px 6px;
     color: #A0AABF;
@@ -441,7 +478,7 @@ QMainWindow, QDialog {
 
 #Topbar {
     background-color: #1F2633;
-    border-bottom: 1px solid #161D29;
+    border: none;
 }
 
 #LogoText {
@@ -454,16 +491,15 @@ QMainWindow, QDialog {
 #LogoM {
     background-color: transparent;
     color: #1A202D;
-    border-radius: 6px;
+    border-radius: 10px;
     border: none;
 }
-
 
 QLineEdit#SearchBar {
     background-color: #283141;
     border: 1px solid #3B4B68;
-    border-radius: 8px;
-    padding: 7px 12px;
+    border-radius: 16px;
+    padding: 7px 14px;
     color: #A0AABF;
     font-size: 13px;
     min-width: 260px;
@@ -473,48 +509,36 @@ QLineEdit#SearchBar:focus {
     color: #FFFFFF;
 }
 
-
 #TopBarBtn {
     background-color: transparent;
     border: none;
     color: #A0AABF;
     font-size: 18px;
     padding: 4px 6px;
-    border-radius: 4px;
+    border-radius: 10px;
 }
 #TopBarBtn:hover {
     color: #00D8D6;
     background-color: rgba(0,216,214,0.08);
 }
 
-
 #GameCard {
     background-color: #1A202D;
-    border-radius: 6px;
+    border-radius: 14px;
     border: 2px solid transparent;
 }
 #GameCard:hover {
-    border: 2px solid #FFFFFF;
+    border: 2px solid rgba(0,216,214,0.6);
+    background-color: #1E2737;
 }
 
 #GameCoverLabel {
     background-color: #131920;
-    border-radius: 6px;
-}
-
-#HoursLabel {
-    color: #CCCCCC;
-    font-size: 10px;
-    background-color: rgba(0,0,0,0.6);
-    padding: 2px 4px;
-    border-radius: 3px;
+    border-radius: 14px;
 }
 
 
-#LaunchDialog {
-    background-color: #2D3848;
-    border-radius: 8px;
-}
+
 
 #DialogTitle {
     font-size: 18px;
@@ -533,7 +557,7 @@ QLineEdit#SearchBar:focus {
     min-width: 100px;
 }
 #PlayBtn:hover {
-    background-color: rgba(255,255,255,0.08);
+    background-color: rgba(0,216,214,0.12);
     border-color: #00D8D6;
     color: #00D8D6;
 }
@@ -549,17 +573,16 @@ QLineEdit#SearchBar:focus {
     min-width: 120px;
 }
 #InstallBtn:hover {
-    background-color: rgba(255,255,255,0.08);
+    background-color: rgba(0,216,214,0.12);
     border-color: #00D8D6;
     color: #00D8D6;
 }
 
-
 QComboBox {
     background-color: #3B4B68;
     border: none;
-    border-radius: 4px;
-    padding: 5px 10px;
+    border-radius: 12px;
+    padding: 5px 12px;
     color: #FFFFFF;
     font-size: 13px;
     min-width: 200px;
@@ -570,17 +593,17 @@ QComboBox::drop-down {
 }
 QComboBox QAbstractItemView {
     background-color: #2B384E;
-    border: 1px solid #1F2633;
+    border: none;
+    border-radius: 10px;
     selection-background-color: #3B4B68;
     color: #FFFFFF;
 }
 
-
 QLineEdit {
     background-color: #3B4B68;
     border: none;
-    border-radius: 4px;
-    padding: 5px 10px;
+    border-radius: 12px;
+    padding: 5px 12px;
     color: #FFFFFF;
     font-size: 13px;
 }
@@ -588,11 +611,10 @@ QLineEdit:focus {
     border: 1px solid #00D8D6;
 }
 
-
 QPushButton {
     background-color: #3B4B68;
     border: none;
-    border-radius: 4px;
+    border-radius: 12px;
     padding: 8px 16px;
     color: #FFFFFF;
     font-weight: bold;
@@ -605,23 +627,21 @@ QPushButton:pressed {
     color: #1F2633;
 }
 
-
 QMenu {
     background-color: #2B384E;
-    border: 1px solid #1F2633;
-    border-radius: 8px;
-    padding: 4px;
+    border: none;
+    border-radius: 12px;
+    padding: 6px;
 }
 QMenu::item {
     background-color: transparent;
     padding: 8px 24px;
     color: #FFFFFF;
-    border-radius: 4px;
+    border-radius: 8px;
 }
 QMenu::item:selected {
     background-color: #3B4B68;
 }
-
 
 QScrollArea {
     border: none;
@@ -661,10 +681,9 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
     background: none;
 }
 
-
 #StatusBar {
     background-color: #1A202D;
-    border-top: 1px solid #161D29;
+    border: none;
 }
 #LogBtn {
     background-color: transparent;
@@ -673,9 +692,11 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
     font-size: 12px;
     font-weight: bold;
     padding: 0px 6px;
+    border-radius: 8px;
 }
 #LogBtn:hover {
     color: #00D8D6;
+    background-color: rgba(0,216,214,0.06);
 }
 #StatusText {
     color: #A0AABF;
@@ -685,7 +706,6 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
     color: #A0AABF;
     font-size: 11px;
 }
-
 
 #IconSelectorBtn {
     background-color: #3B4B68;
@@ -701,7 +721,6 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
     border: 2px solid #A0AABF;
 }
 
-
 #SteamTitle {
     color: #FFFFFF;
     font-size: 48px;
@@ -709,9 +728,9 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
     letter-spacing: 4px;
 }
 
-
 QTabWidget::pane {
-    border: 1px solid #1F2633;
+    border: none;
+    border-radius: 12px;
     background-color: #283141;
 }
 QTabBar::tab {
@@ -719,6 +738,8 @@ QTabBar::tab {
     color: #A0AABF;
     padding: 8px 16px;
     border: none;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
 }
 QTabBar::tab:selected {
     background-color: #283141;
@@ -733,13 +754,14 @@ QPlainTextEdit {
     background-color: #1A202D;
     color: #A0AABF;
     border: none;
+    border-radius: 10px;
     font-family: monospace;
     font-size: 12px;
 }
 
 QGroupBox {
     border: 1px solid #3B4B68;
-    border-radius: 4px;
+    border-radius: 12px;
     margin-top: 8px;
     padding-top: 8px;
     color: #A0AABF;
@@ -753,7 +775,7 @@ QGroupBox::title {
 """
 
 APP_NAME = "MacNCheese"
-APP_VERSION = "v4.3.1"
+APP_VERSION = "v2.0.0"
 GITHUB_REPO = "mont127/MacNdCheese"
 GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
@@ -796,7 +818,6 @@ LAUNCH_BACKENDS = (
     ("Mesa swr (CPU rasterizer)", LAUNCH_BACKEND_MESA_SWR),
     ("GPTK (D3DMetal)", LAUNCH_BACKEND_GPTK),
 )
-
 
 
 @dataclass(frozen=True)
@@ -1276,7 +1297,9 @@ class GameEntry:
         sub_exes.sort(key=lambda p: p.stat().st_size, reverse=True)
         candidates.extend(sub_exes)
 
-        if "poppy playtime" in self.name.lower() or "poppy" in self.install_dir_name.lower():
+        low_name = self.name.lower()
+        low_install = self.install_dir_name.lower()
+        if "poppy playtime" in low_name or "poppy" in low_install or "project playtime" in low_name or "project playtime" in low_install:
             for exe in candidates:
                 lowered = exe.name.lower()
                 if "shipping.exe" in lowered and "win64" in str(exe).lower():
@@ -1402,7 +1425,9 @@ class GameEntry:
                 seen.add(str(exe))
                 candidates.append(exe)
 
-        if "poppy playtime" in self.name.lower() or "poppy" in self.install_dir_name.lower():
+        low_name = self.name.lower()
+        low_install = self.install_dir_name.lower()
+        if "poppy playtime" in low_name or "poppy" in low_install or "project playtime" in low_name or "project playtime" in low_install:
             candidates.sort(
                 key=lambda p: (
                     0 if ("shipping.exe" in p.name.lower() and "win64" in str(p).lower()) else 1,
@@ -1575,13 +1600,19 @@ class SteamScanner:
         return games
 
 
-
 class CreateBottleDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Create a Bottle")
         self.setObjectName("LaunchDialog")
         self.setFixedSize(480, 520)
+        self.setWindowOpacity(0.0)
+        self._fade_anim = QPropertyAnimation(self, b"windowOpacity")
+        self._fade_anim.setDuration(200)
+        self._fade_anim.setStartValue(0.0)
+        self._fade_anim.setEndValue(1.0)
+        self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._fade_anim.start()
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 32, 32, 32)
@@ -1601,7 +1632,7 @@ class CreateBottleDialog(QDialog):
         name_lbl = QLabel("Bottle Name")
         name_lbl.setStyleSheet("color: #A0AABF; font-size: 12px; font-weight: bold;")
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("e.g. My Awesome Game")
+        self.name_edit.setPlaceholderText("e.g. Cool Library")
         name_group.addWidget(name_lbl)
         name_group.addWidget(self.name_edit)
         form_layout.addLayout(name_group)
@@ -1656,23 +1687,31 @@ class CreateBottleDialog(QDialog):
         win_group.addWidget(self.win_combo)
         form_layout.addLayout(win_group)
         
-        icon_group_box = QVBoxLayout()
-        icon_group_box.setSpacing(8)
-        icon_lbl = QLabel("Bottle Icon (PNG)")
-        icon_lbl.setStyleSheet("color: #A0AABF; font-size: 12px; font-weight: bold;")
-
-        icon_row = QHBoxLayout()
-        self.icon_path_edit = QLineEdit()
-        self.icon_path_edit.setPlaceholderText("Select a custom PNG icon...")
-        btn_browse_icon = QPushButton("...")
-        btn_browse_icon.setFixedSize(32, 32)
-        btn_browse_icon.clicked.connect(self._browse_icon)
-        icon_row.addWidget(self.icon_path_edit)
-        icon_row.addWidget(btn_browse_icon)
-
-        icon_group_box.addWidget(icon_lbl)
-        icon_group_box.addLayout(icon_row)
-        form_layout.addLayout(icon_group_box)
+               
+        icons_group = QVBoxLayout()
+        icons_group.setSpacing(8)
+        icons_lbl = QLabel("Platform")
+        icons_lbl.setStyleSheet("color: #A0AABF; font-size: 12px; font-weight: bold;")
+        
+        icons_row = QHBoxLayout()
+        self.icon_group = QButtonGroup(self)
+        self.icon_group.setExclusive(True)
+        
+        for i, icon_text in enumerate(["+", "", "E", "EA", "U"]):
+            btn = QPushButton(icon_text)
+            btn.setObjectName("IconSelectorBtn")
+            btn.setCheckable(True)
+            btn.setFixedSize(48, 48)
+            btn.setStyleSheet("font-size: 20px;" if i < 2 else "font-size: 16px; font-weight: bold;")
+            if i == 0:
+                btn.setChecked(True)
+            self.icon_group.addButton(btn)
+            icons_row.addWidget(btn)
+            
+        icons_row.addStretch()
+        icons_group.addWidget(icons_lbl)
+        icons_group.addLayout(icons_row)
+        form_layout.addLayout(icons_group)
         
         layout.addLayout(form_layout)
         layout.addStretch()
@@ -1697,11 +1736,6 @@ class CreateBottleDialog(QDialog):
         if f:
             self.exe_edit.setText(f)
 
-    def _browse_icon(self):
-        f, _ = QFileDialog.getOpenFileName(self, "Select Bottle Icon", str(Path.home()), "PNG Images (*.png);;All Files (*)")
-        if f:
-            self.icon_path_edit.setText(f)
-
 
 class GameLaunchDialog(QDialog):
     def __init__(self, game: "GameEntry", parent=None):
@@ -1713,6 +1747,13 @@ class GameLaunchDialog(QDialog):
         self.setWindowTitle(game.name)
         self.setObjectName("LaunchDialog")
         self.setFixedSize(560, 320)
+        self.setWindowOpacity(0.0)
+        self._fade_anim = QPropertyAnimation(self, b"windowOpacity")
+        self._fade_anim.setDuration(200)
+        self._fade_anim.setStartValue(0.0)
+        self._fade_anim.setEndValue(1.0)
+        self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._fade_anim.start()
         
         layout = QHBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
@@ -1724,7 +1765,7 @@ class GameLaunchDialog(QDialog):
         cover_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         cover_lbl.setFixedSize(160, 240)
         cover_lbl.setScaledContents(False)
-        cover_lbl.setStyleSheet("background-color: #131920; border-radius: 8px;")
+        cover_lbl.setStyleSheet("background-color: #131920; border-radius: 14px;")
         
         if hasattr(parent, "_cover_cache") and game.appid in parent._cover_cache:
             try:
@@ -1954,7 +1995,7 @@ class MainWindow(QMainWindow):
         token = f"{game.name} {game.install_path.name}".lower()
         exe_name = game.exe_path.name.lower() if game.exe_path else ""
 
-        if "poppy playtime" in token or "poppy_playtime" in exe_name:
+        if "poppy playtime" in token or "poppy_playtime" in exe_name or "project playtime" in token or "project_playtime" in exe_name:
             return LAUNCH_BACKEND_DXVK
         if "mewgenics" in token:
             return LAUNCH_BACKEND_MESA_LLVMPIPE
@@ -2088,16 +2129,13 @@ class MainWindow(QMainWindow):
         if not self._set_label_pixmap_from_asset(lbl_m, "Wine.png", width=28, height=28):
             lbl_m.setText("M")
             lbl_m.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_text = QLabel("MacNCheese library")
+        lbl_text = QLabel("MacNCheese Library")
         lbl_text.setObjectName("LogoText")
         logo_layout.addWidget(lbl_m)
         logo_layout.addWidget(lbl_text)
         topbar_layout.addLayout(logo_layout)
 
         topbar_layout.addSpacing(32)
-
-
-
 
         self.search_bar = QLineEdit()
         self.search_bar.setObjectName("SearchBar")
@@ -2106,7 +2144,7 @@ class MainWindow(QMainWindow):
         self.search_bar.textChanged.connect(self._filter_games)
         topbar_layout.addWidget(self.search_bar)
 
-
+        
 
         main_layout.addWidget(topbar)
 
@@ -2136,11 +2174,11 @@ class MainWindow(QMainWindow):
         
         steam_buttons_layout = QHBoxLayout()
         self.btn_install_steam = QPushButton("Install Steam")
-        self.btn_install_steam.setStyleSheet("padding: 12px 24px; font-size: 16px; background-color: transparent; border: 2px solid #FFFFFF; border-radius: 4px;")
+        self.btn_install_steam.setStyleSheet("padding: 12px 24px; font-size: 16px; background-color: transparent; border: 2px solid #FFFFFF; border-radius: 16px;")
         self.btn_install_steam.clicked.connect(self.unified_steam_action)
         
         self.btn_launch_steam = QPushButton("▶")
-        self.btn_launch_steam.setStyleSheet("padding: 12px; font-size: 16px; background-color: transparent; border: 2px solid #FFFFFF; border-radius: 4px;")
+        self.btn_launch_steam.setStyleSheet("padding: 12px; font-size: 16px; background-color: transparent; border: 2px solid #FFFFFF; border-radius: 16px;")
         self.btn_launch_steam.clicked.connect(self.launch_steam)
         
         steam_buttons_layout.addWidget(self.btn_install_steam)
@@ -2275,13 +2313,12 @@ class MainWindow(QMainWindow):
                 self.settings._save_current_prefixes()
 
             name = dlg.name_edit.text().strip() or "Bottle"
-            icon_path = None
-            if hasattr(dlg, "icon_path_edit"):
-                icon_value = dlg.icon_path_edit.text().strip()
-                if icon_value:
-                    icon_path = Path(icon_value).expanduser()
+            icon_text = "📦"
+            if hasattr(dlg, "icon_group") and dlg.icon_group.checkedButton():
+                icon_text = dlg.icon_group.checkedButton().text()
 
-            btn = self._add_sidebar_container(name, icon_path=icon_path)
+            btn = self._add_sidebar_container(name)
+            btn._prefix_path = str(p)
             
                                                                                     
             btn.clicked.connect(lambda _, path=str(p): self._switch_to_bottle(path))
@@ -2296,6 +2333,17 @@ class MainWindow(QMainWindow):
             
             self.set_status(f"Created bottle '{name}' at {p}")
             self.scan_games()
+
+    def remove_sidebar_button_for_prefix(self, path: str) -> None:
+        for i in range(self._sidebar_containers_layout.count()):
+            item = self._sidebar_containers_layout.itemAt(i)
+            if item and item.widget():
+                btn = item.widget()
+                if getattr(btn, "_prefix_path", None) == path:
+                    self.sidebar_group.removeButton(btn)
+                    self._sidebar_containers_layout.removeWidget(btn)
+                    btn.deleteLater()
+                    break
 
     def _filter_games(self, text: str) -> None:
                                                         
@@ -2357,6 +2405,7 @@ class MainWindow(QMainWindow):
         card = QFrame()
         card.setObjectName("GameCard")
         card.setFixedSize(150, 225)
+        card.setStyleSheet("#GameCard { overflow: hidden; }")
         card._game_name = game.name
 
         layout = QVBoxLayout(card)
@@ -2366,9 +2415,9 @@ class MainWindow(QMainWindow):
         cover_lbl = QLabel()
         cover_lbl.setObjectName("GameCoverLabel")
         cover_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cover_lbl.setFixedSize(150, 200)
+        cover_lbl.setFixedSize(150, 225)
         cover_lbl.setScaledContents(False)
-        cover_lbl.setStyleSheet("background-color: #131920; border-radius: 6px;")
+        cover_lbl.setStyleSheet("background-color: #131920; border-radius: 14px;")
 
         def _apply_pixmap(data: bytes, lbl: QLabel = cover_lbl) -> None:
             try:
@@ -2376,13 +2425,13 @@ class MainWindow(QMainWindow):
                 pix.loadFromData(data)
                 if pix.isNull():
                     return
-                scaled = pix.scaled(150, 200, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                scaled = pix.scaled(150, 225, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                                     Qt.TransformationMode.SmoothTransformation)
                 x_off = max(0, (scaled.width() - 150) // 2)
-                y_off = max(0, (scaled.height() - 200) // 2)
-                cropped = scaled.copy(x_off, y_off, 150, 200)
+                y_off = max(0, (scaled.height() - 225) // 2)
+                cropped = scaled.copy(x_off, y_off, 150, 225)
                 lbl.setPixmap(cropped)
-                lbl.setStyleSheet("border-radius: 6px;")
+                lbl.setStyleSheet("border-radius: 14px;")
             except RuntimeError:
                 pass
 
@@ -2419,12 +2468,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(cover_lbl)
 
-       
-        hours_lbl = QLabel("0.0 h")
-        hours_lbl.setObjectName("HoursLabel")
-        hours_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hours_lbl.setFixedHeight(25)
-        layout.addWidget(hours_lbl)
+
 
        
         def _select_game():
@@ -2468,7 +2512,7 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         action_setup_btn = QWidgetAction(menu)
         setup_btn = QPushButton("One Click SetUp")
-        setup_btn.setStyleSheet("background-color: #FF6600; font-weight: bold; border-radius: 4px; padding: 6px;")
+        setup_btn.setStyleSheet("background-color: #FF6600; font-weight: bold; border-radius: 12px; padding: 6px;")
         setup_btn.clicked.connect(self.quick_setup)
         setup_btn.clicked.connect(menu.close)
         container = QWidget()
@@ -2486,7 +2530,6 @@ class MainWindow(QMainWindow):
         action_wine.triggered.connect(self.install_wine)
         action_steam.triggered.connect(self.install_steam)
         menu.exec(card_widget.mapToGlobal(pos))
-
 
 
     def _pick_dir(self, target: QLineEdit) -> None:
@@ -2935,7 +2978,6 @@ class MainWindow(QMainWindow):
             DEFAULT_MESA_URL,
         ]
         self.run_commands([args], env=env, cwd=str(script.parent))
-
 
 
     def _version_tuple(self, value: str) -> tuple[int, ...]:
@@ -3646,18 +3688,17 @@ class MainWindow(QMainWindow):
 
 
 def request_microphone_permission() -> bool:
-    """Checks and requests microphone permission on macOS."""
     if sys.platform != "darwin":
         return True
 
     try:
         status = AV.AVCaptureDevice.authorizationStatusForMediaType_(AV.AVMediaTypeAudio)
-        if status == 0:  # AVAuthorizationStatusNotDetermined
+        if status == 0:
             AV.AVCaptureDevice.requestAccessForMediaType_completionHandler_(
                 AV.AVMediaTypeAudio, lambda granted: None
             )
             return False
-        return status == 3  # AVAuthorizationStatusAuthorized
+        return status == 3
     except Exception:
         return False
 
