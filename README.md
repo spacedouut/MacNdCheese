@@ -55,29 +55,29 @@ Click the **Install Steam** button. The Steam installer will pop up — go throu
 ### 🤔 What even is this?
 MacNCheese is a free launcher that runs Windows games on macOS using Wine. It automatically sets up all the technical stuff (graphics translation layers, DLL overrides, etc.) so you don't have to.
 
-### 💸 Is it free?
+### Is it free?
 100% free and open source, forever.
 
-### 🆚 Is it better than CrossOver?
+### Is it better than CrossOver?
 CrossOver is a paid product with official support. MacNCheese is free and community-built. For casual gaming it works great — but if you need professional support, CrossOver exists for that.
 
-### 🥃 Is it a replacement for Whisky?
-It's the spiritual successor — Whisky is no longer maintained, and MacNCheese picks up where it left off with a focus on Steam games and modern graphics backends.
+### Is it a replacement for Whisky?
+No not at all its a one of its own architectures and is completely different steam launch you can call this "Proton that mac never had"
 
-### 🎮 What kinds of games work best?
-- ✅ DirectX 11 games (most common)
-- ✅ Unity games
-- ✅ DirectX 12 games (with VKD3D-Proton)
-- ⚠️ DirectX 9 games (hit or miss)
-- ❌ Games with kernel-level anti-cheat (EAC, BattlEye, Vanguard) — these will **not** work
+### What kinds of games work best?
+- DirectX 11 games (most common)
+- Unity games
+- DirectX 12 games (with VKD3D-Proton)
+- DirectX 9 games (hit or miss)
+- Games with kernel-level anti-cheat (EAC, BattlEye, Vanguard) — these will **not** work
 
-### 🛡️ Why don't anti-cheat games work?
+### Why don't anti-cheat games work?
 Anti-cheat software like Easy Anti-Cheat and BattlEye require deep Windows system access that Wine can't provide. This is a Wine limitation, not a MacNCheese one.
 
-### 🖥️ Does it work on Intel Macs?
+### Does it work on Intel Macs?
 Officially, **no** — MacNCheese is built and tested for **Apple Silicon** (M1, M2, M3, M4…). Intel Macs are not the target. You *might* get it running from source (see below), but it's not supported.
 
-### 🎯 What backend should I use?
+### What backend should I use?
 Leave it on **Auto** and let the app decide. If you're curious:
 
 | Backend | Use it for |
@@ -87,21 +87,21 @@ Leave it on **Auto** and let the app decide. If you're curious:
 | **DXMT** | Experimental DX11 via Metal (bleeding edge) |
 | **Mesa** | Fallback / debugging |
 
-### ❓ My game says "DirectX 11 not available"
+### My game says "DirectX 11 not available"
 The graphics backend didn't load properly. Try:
 1. Making sure Wine is installed (click Install Wine)
 2. Switching backends (try DXVK)
 3. Re-launching the game
 
-### 🗂️ Do Steam and the game need to be in the same Wine prefix?
+### Do Steam and the game need to be in the same Wine prefix?
 Yes. Keep everything in the same prefix (the default one is fine) and it'll all work together.
 
-### 💡 Why does this exist instead of just using the terminal?
+### Why does this exist instead of just using the terminal?
 Because setting this up manually is painful, repetitive, and full of obscure commands. MacNCheese does it once so you never have to again.
 
 ---
 
-## 🔧 Building Manually (for nerds)
+## Building Manually (for nerds)
 
 > You only need this if you're on Intel or want to run from source. Normal users should just [download the app](https://github.com/mont127/MacNdCheese/releases).
 
