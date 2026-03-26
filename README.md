@@ -1,75 +1,115 @@
+<p align="center">
+  <img src="icon.png" width="128" alt="MacNCheese icon" />
+</p>
+
 # MacNCheese
-(ty spacedoutt for contributing) 
-MacNCheese manages Wine alongside custom graphics dependencies (ex. MoltenVK, D3D11, Vulkan, etc..) to make installing and running Wine games easier on macOS.
+### Windows games on Mac, made free & easy.
 
-## FAQ
+The spiritual successor to [Whisky](https://github.com/Whisky-App/Whisky) — no subscriptions, no paywalls, just games.
 
-### What makes macndcheese uniqe and niche?
+MacNCheese is a simple app that lets you install and play Windows games on your Mac using Wine, with all the graphics stuff (DXVK, MoltenVK, Vulkan…) handled automatically so you don't have to touch the terminal.
 
-It uses dual runtime for steam and the game
->Dual runtime is a way to play steam games by initilazing steam without any extra dll files and using WINEDLLOVERRIDES macndcheese is able to launch the game with graphical dll files.
+💬 **Need help?** Join the [Discord server](https://discord.gg/UPpVShYDaf)!
 
+---
 
-### Is this a replacement for CrossOver?
+## 🚀 Quickstart Guide
 
-No. MacNCheese is not trying to be a full commercial compatibility suite. It is more of a focused launcher for Steam and Wine environments on macOS.
+### Step 1 — Before you begin: download Steam for Windows
+Go to [store.steampowered.com](https://store.steampowered.com/about/) and download **SteamSetup.exe** (the Windows version). Save it to your **Downloads** folder. You'll need this later.
 
-### Is this just another Wine wrapper?
+### Step 2 — Download & Install MacNCheese
+1. Download the latest `.dmg` from the [Releases](https://github.com/mont127/MacNdCheese/releases) page
+2. Open the `.dmg` file
+3. Drag **MacNCheese** into your **Applications** folder
+4. Open the app from Applications
 
-Not really. It does still rely on Wine, but the point is to make backend switching and Wine based launching less annoying to manage.
+### ⚠️ Mac says the app "can't be verified"?
+That's just macOS being overprotective. Here's how to fix it:
 
-## Why make this or what motived you to make this?
+1. Go to **System Settings** → **Privacy & Security**
+2. Scroll down until you see a message about MacNCheese being blocked
+3. Click **"Open Anyway"**
+4. Enter your Mac password if asked
+5. Open the app again — it'll work now ✅
 
->>To be honest my friend wanted to play mewgenics on his mac so i built this for him 
+### Step 3 — Install everything with one click
+Once the app is open, click the **Install** button. It'll automatically download and set up Wine and all the other stuff it needs. Just wait for it to finish.
 
+### Step 4 — Install Steam
+Click the **Install Steam** button. The Steam installer will pop up — go through it like normal and log into your Steam account when it asks.
 
-### Does it support anti cheat games?
+> 🔝 **To open Steam later**, use the **Steam button at the top of the app**.
 
-Usually no. Games with anti cheat systems such as VAC or kernel level anti cheat are generally not expected to work.
+### Step 5 — Install & launch your game
+1. Open Steam (top of the app), find your game, and install it
+2. Come back to MacNCheese — your game should appear in the list
+3. Select it and hit **Launch** 🎮
 
-### Why Apple Silicon only?
+> **Not sure which backend to pick?** Just leave it on **Auto** — it'll figure it out.
 
-Because that is the main target for the project and most of the graphics backend testing is being done around Apple Silicon and Metal.
+---
 
-### Can Intel work?
+## ❓ FAQ
 
-Maybe. It is not the main target and it may need more manual setup, but you can still try running it from source.
+### 🤔 What even is this?
+MacNCheese is a free launcher that runs Windows games on macOS using Wine. It automatically sets up all the technical stuff (graphics translation layers, DLL overrides, etc.) so you don't have to.
 
-### What backend should I use?
+### 💸 Is it free?
+100% free and open source, forever.
 
-As a general rule:
+### 🆚 Is it better than CrossOver?
+CrossOver is a paid product with official support. MacNCheese is free and community-built. For casual gaming it works great — but if you need professional support, CrossOver exists for that.
 
-> DXVK for most DirectX 10 and 11 games
-> DXMT if you want to test an experimental DirectX 11 path
-> VKD3D-Proton for DirectX 12 games
->Mesa for fallback cases or debugging
+### 🥃 Is it a replacement for Whisky?
+It's the spiritual successor — Whisky is no longer maintained, and MacNCheese picks up where it left off with a focus on Steam games and modern graphics backends.
 
-### Why do some games say DirectX 11 is missing?
+### 🎮 What kinds of games work best?
+- ✅ DirectX 11 games (most common)
+- ✅ Unity games
+- ✅ DirectX 12 games (with VKD3D-Proton)
+- ⚠️ DirectX 9 games (hit or miss)
+- ❌ Games with kernel-level anti-cheat (EAC, BattlEye, Vanguard) — these will **not** work
 
-That usually means the selected backend failed to initialize properly, or the translation layer does not support something the game expects.
+### 🛡️ Why don't anti-cheat games work?
+Anti-cheat software like Easy Anti-Cheat and BattlEye require deep Windows system access that Wine can't provide. This is a Wine limitation, not a MacNCheese one.
 
-### Does Steam have to be launched inside the same Wine prefix?
+### 🖥️ Does it work on Intel Macs?
+Officially, **no** — MacNCheese is built and tested for **Apple Silicon** (M1, M2, M3, M4…). Intel Macs are not the target. You *might* get it running from source (see below), but it's not supported.
 
-Yes. Steam and the game should generally live in the same prefix if you want Steam integration to behave correctly.
+### 🎯 What backend should I use?
+Leave it on **Auto** and let the app decide. If you're curious:
 
-### Why not just do everything in Terminal?
+| Backend | Use it for |
+|---|---|
+| **DXVK** | Most DirectX 10/11 games |
+| **VKD3D-Proton** | DirectX 12 games |
+| **DXMT** | Experimental DX11 via Metal (bleeding edge) |
+| **Mesa** | Fallback / debugging |
 
-You can. The point of MacNCheese is to make the workflow less repetitive and easier to manage without rebuilding the same setup every time.
+### ❓ My game says "DirectX 11 not available"
+The graphics backend didn't load properly. Try:
+1. Making sure Wine is installed (click Install Wine)
+2. Switching backends (try DXVK)
+3. Re-launching the game
 
-## Requirements
+### 🗂️ Do Steam and the game need to be in the same Wine prefix?
+Yes. Keep everything in the same prefix (the default one is fine) and it'll all work together.
 
-> [!WARNING]  
-> This is DESIGNED for Apple Silicon Macs, not Intel. See Intel section.
-> This is also designed for Unity and / or DirectX 11 games. Use other apps with caution.
+### 💡 Why does this exist instead of just using the terminal?
+Because setting this up manually is painful, repetitive, and full of obscure commands. MacNCheese does it once so you never have to again.
 
-- Something running macOS, preferably Apple Silicon
-- [Homebrew](https://brew.sh/)
-- Xcode Command Line Tools 
-  - If you have homebrew, this is already installed.
- 
-## So what about Intel?
-Theoretically, this works on Intel, but it's designed with Apple Silicon in mind. You can clone the repo and run it locally with UV if you'd like:
+---
 
+## 🔧 Building Manually (for nerds)
+
+> You only need this if you're on Intel or want to run from source. Normal users should just [download the app](https://github.com/mont127/MacNdCheese/releases).
+
+**Requirements:**
+- macOS with [Homebrew](https://brew.sh/) installed
+- Xcode Command Line Tools (`xcode-select --install`)
+
+**Run from source:**
 ```bash
 git clone https://github.com/mont127/MacNdCheese/
 cd MacNdCheese
@@ -79,102 +119,99 @@ uv pip install -r ./requirements.txt
 uv run MacNCheese.py
 ```
 
-It's just PyQT6 with a GUI layer. If you'd prefer, try the Manual setup below; it's effectively the same thing with less polish and more terminal.
+**Manual full setup (the hard way):**
 
+<details>
+<summary>Click to expand — only if you enjoy suffering 😅</summary>
 
-## Setup (manual, only do this if you enjoy suffering)
-
-### Step 1. Install Dependencies
+### 1. Install dependencies
 ```bash
 brew install mingw-w64 meson ninja molten-vk vulkan-sdk glslang wine-stable p7zip
 ```
 
-### Step 2. Setup DXVK
-DXVK is required for Vulkan support. Clone the repo, then build with meson & ninja.
+### 2. Build DXVK
 ```bash
 cd ~
 git clone https://github.com/Gcenx/DXVK-macOS.git
 cd DXVK-macOS
 
-mkdir -p “$HOME/dxvk-release”
+mkdir -p "$HOME/dxvk-release"
 
-meson setup “$HOME/dxvk-release/build.64” 
-–cross-file “$HOME/DXVK-macOS/build-win64.txt” 
-–prefix “$HOME/dxvk-release” 
-–buildtype release 
--Denable_d3d9=false
+meson setup "$HOME/dxvk-release/build.64" \
+  --cross-file "$HOME/DXVK-macOS/build-win64.txt" \
+  --prefix "$HOME/dxvk-release" \
+  --buildtype release \
+  -Denable_d3d9=false
 
-ninja -C “$HOME/dxvk-release/build.64”
-ninja -C “$HOME/dxvk-release/build.64” install
+ninja -C "$HOME/dxvk-release/build.64"
+ninja -C "$HOME/dxvk-release/build.64" install
 ```
-DXVK is now built.
 
-### Step 3. Wine Setup
-Setup a prefix and "boot" wine.
+### 3. Set up a Wine prefix
 ```bash
-export WINEPREFIX=”$HOME/wined”
+export WINEPREFIX="$HOME/wined"
 wine wineboot
 ```
 
-### Step 4. Steam Install
-Download SteamSetup.exe from the official Steam website and place it in Downloads. Click the windows icon under the download button.
-
+### 4. Install Steam
+Download `SteamSetup.exe` from the official Steam website, then:
 ```bash
-wine “$HOME/Downloads/SteamSetup.exe”
+wine "$HOME/Downloads/SteamSetup.exe"
 ```
-
-Complete installation inside the Wine window.
-
-When you finish, start Steam with:
-
+Complete the installer, then launch Steam:
 ```bash
-export WINEPREFIX=”$HOME/wined”
-cd “$WINEPREFIX/drive_c/Program Files (x86)/Steam”
+export WINEPREFIX="$HOME/wined"
+cd "$WINEPREFIX/drive_c/Program Files (x86)/Steam"
 wine steam.exe -no-cef-sandbox -vgui
 ```
+Log in and install your game.
 
-Login and install your game(s).
-
-### Step 5. DXVK library setup
-Before you install your games, you need to setup DXVK inside them.
-
-This example sets up DXVK in People Playground. Adjust the name of the game directory accordingly.
+### 5. Copy DXVK DLLs into the game folder
 ```bash
-GAME_DIR=”$WINEPREFIX/drive_c/Program Files (x86)/Steam/steamapps/common/People Playground”
-
-cp “$HOME/dxvk-release/bin/dxgi.dll” “$GAME_DIR/”
-cp “$HOME/dxvk-release/bin/d3d11.dll” “$GAME_DIR/”
-cp “$HOME/dxvk-release/bin/d3d10core.dll” “$GAME_DIR/”
+GAME_DIR="$WINEPREFIX/drive_c/Program Files (x86)/Steam/steamapps/common/YOUR GAME NAME"
+cp "$HOME/dxvk-release/bin/dxgi.dll" "$GAME_DIR/"
+cp "$HOME/dxvk-release/bin/d3d11.dll" "$GAME_DIR/"
+cp "$HOME/dxvk-release/bin/d3d10core.dll" "$GAME_DIR/"
 ```
 
-### Step 6. Launching Games
-Steam must be running first. Export your environment variables, then launch the game.
-
+### 6. Launch the game
 ```bash
-export WINEPREFIX=”$HOME/wined”
-export WINEDLLOVERRIDES=“dxgi,d3d11,d3d10core=n,b”
-export DXVK_LOG_PATH=”$HOME/dxvk-logs”
+export WINEPREFIX="$HOME/wined"
+export WINEDLLOVERRIDES="dxgi,d3d11,d3d10core=n,b"
+export DXVK_LOG_PATH="$HOME/dxvk-logs"
 export DXVK_LOG_LEVEL=info
 
-cd “$WINEPREFIX/drive_c/Program Files (x86)/Steam/steamapps/common/People Playground” # Replace the name of the game
-
-wine “People Playground.exe” # Replace the name of the game
+cd "$WINEPREFIX/drive_c/Program Files (x86)/Steam/steamapps/common/YOUR GAME NAME"
+wine "YourGame.exe"
 ```
 
-In the future, you can run games simpler with a command similar to this:
+</details>
 
-```bash
-export WINEPREFIX=”$HOME/wined”
-cd “$WINEPREFIX/drive_c/Program Files (x86)/Steam”
-wine steam.exe -no-cef-sandbox -vgui
+---
 
-# Then start the game
-export WINEPREFIX=”$HOME/wined”
-export WINEDLLOVERRIDES=“dxgi,d3d11,d3d10core=n,b”
-cd “$WINEPREFIX/drive_c/Program Files (x86)/Steam/steamapps/common/People Playground”
-wine “People Playground.exe”
-```
+## 👥 Contributors
 
-You now have a working DirectX 11 translation layer running through Metal on macOS. Congrats!
+[![Contributors](https://contrib.rocks/image?repo=mont127/MacNdCheese)](https://github.com/mont127/MacNdCheese/graphs/contributors)
 
-Contact : deepwokenpersona@gmail.com
+Want to contribute? PRs are welcome!
+
+---
+
+## 🙏 Special Thanks
+
+MacNCheese wouldn't exist without these incredible open source projects:
+
+| Project | What it does |
+|---|---|
+| [Wine](https://www.winehq.org/) | Runs Windows software on macOS/Linux |
+| [DXVK](https://github.com/doitsujin/dxvk) / [DXVK-macOS](https://github.com/Gcenx/DXVK-macOS) | Translates DirectX 11 → Vulkan |
+| [MoltenVK](https://github.com/KhronosGroup/MoltenVK) | Translates Vulkan → Metal (Apple's GPU API) |
+| [VKD3D-Proton](https://github.com/HansKristian-Work/vkd3d-proton) | Translates DirectX 12 → Vulkan |
+| [DXMT](https://github.com/3Shain/dxmt) | Translates DirectX 11 → Metal directly |
+| [Whisky](https://github.com/Whisky-App/Whisky) | The inspiration and predecessor |
+
+---
+
+Made with ❤️ for Mac gamers everywhere.
+
+📬 Contact: deepwokenpersona@gmail.com
