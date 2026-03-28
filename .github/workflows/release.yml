@@ -1,65 +1,140 @@
-name: Build & Release
+#!/usr/bin/env bash
+set -euo pipefail
 
-on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version (e.g. 1.0.0)'
-        required: true
-  push:
-    tags:
-      - 'v*'
+ARCH_NAME="${1:-local}"
 
-jobs:
-  build-macos:
-    runs-on: macos-latest
+APP_NAME="MacNCheese"
+BUNDLE_ID="com.marcel.macncheese"
+BUILD_VENV=".build-venv"
+PYTHON_BIN="$(command -v python3)"
+PYTHON_PREFIX="$(python3 - <<'PY'
+import sys
+print(sys.base_prefix)
+PY
+)"
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+echo "Using Python: $PYTHON_BIN"
+"$PYTHON_BIN" --version
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+rm -rf build dist "$BUILD_VENV" "${APP_NAME}.spec" "${APP_NAME}.dmg" "${APP_NAME}-${ARCH_NAME}.dmg"
+mkdir -p assets/icon.iconset
 
-      - name: Install dependencies
-        run: pip install pyinstaller PyQt6 pyobjc
+if [ ! -f "icon.png" ]; then
+  echo "Missing icon.png in repo root"
+  exit 1
+fi
 
-      - name: Build .app
-        run: pyinstaller MacNCheese.spec
+file icon.png
+sips -g format icon.png
 
-      - name: Determine version
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=v${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          fi
+sips -z 16 16     icon.png --out assets/icon.iconset/icon_16x16.png
+sips -z 32 32     icon.png --out assets/icon.iconset/icon_16x16@2x.png
+sips -z 32 32     icon.png --out assets/icon.iconset/icon_32x32.png
+sips -z 64 64     icon.png --out assets/icon.iconset/icon_32x32@2x.png
+sips -z 128 128   icon.png --out assets/icon.iconset/icon_128x128.png
+sips -z 256 256   icon.png --out assets/icon.iconset/icon_128x128@2x.png
+sips -z 256 256   icon.png --out assets/icon.iconset/icon_256x256.png
+sips -z 512 512   icon.png --out assets/icon.iconset/icon_256x256@2x.png
+sips -z 512 512   icon.png --out assets/icon.iconset/icon_512x512.png
+sips -z 1024 1024 icon.png --out assets/icon.iconset/icon_512x512@2x.png
 
-      - name: Install create-dmg
-        run: brew install create-dmg
+iconutil -c icns assets/icon.iconset -o assets/MacNCheese.icns
+ls -la assets/MacNCheese.icns
 
-      - name: Package .dmg
-        run: |
-          create-dmg \
-            --volname "MacNCheese" \
-            --window-pos 200 120 \
-            --window-size 660 400 \
-            --icon-size 128 \
-            --icon "MacNCheese.app" 180 185 \
-            --hide-extension "MacNCheese.app" \
-            --app-drop-link 480 185 \
-            "MacNCheese-${{ steps.version.outputs.tag }}.dmg" \
-            "dist/MacNCheese.app"
+"$PYTHON_BIN" -m venv "$BUILD_VENV"
+source "$BUILD_VENV/bin/activate"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: MacNCheese ${{ steps.version.outputs.tag }}
-          files: MacNCheese-${{ steps.version.outputs.tag }}.dmg
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+python -c "import platform; print(platform.python_version(), platform.machine())"
+python -m pip install -U pip wheel setuptools
+python -m pip install -U PyQt6 pyinstaller pyobjc-core pyobjc-framework-Quartz pyobjc-framework-Cocoa certifi
+
+python - <<'PY'
+import Quartz
+import Cocoa
+print("PyObjC frameworks OK")
+PY
+
+chmod +x installer.sh
+
+python -m PyInstaller \
+  --noconfirm \
+  --clean \
+  --windowed \
+  --name MacNCheese \
+  --icon assets/MacNCheese.icns \
+  --osx-bundle-identifier com.marcel.macncheese \
+  --add-data "installer.sh:." \
+  --add-data "Steam.png:." \
+  --add-data "Wine.png:." \
+  --add-data "Setting.png:." \
+  --add-data "Add.png:." \
+  MacNCheese.py
+
+APP_ROOT="dist/MacNCheese.app"
+APP_PLIST="$APP_ROOT/Contents/Info.plist"
+GPTK_ROOT="$APP_ROOT/Contents/gptk"
+GPTK_APP="$GPTK_ROOT/lib/wine/Game Porting Toolkit__dot__app"
+
+if [ ! -d "$APP_ROOT" ]; then
+  echo "Build failed: $APP_ROOT not found"
+  exit 1
+fi
+
+/usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string MacNCheese" "$APP_PLIST" 2>/dev/null || true
+plutil -p "$APP_PLIST"
+
+OPENSSL_LIB_DIR="$PYTHON_PREFIX/lib"
+
+if [ -f "$OPENSSL_LIB_DIR/libssl.3.dylib" ] && [ -f "$OPENSSL_LIB_DIR/libcrypto.3.dylib" ]; then
+  rm -f "$APP_ROOT/Contents/Frameworks/libssl.3.dylib" "$APP_ROOT/Contents/Frameworks/libcrypto.3.dylib"
+  cp "$OPENSSL_LIB_DIR/libssl.3.dylib" "$APP_ROOT/Contents/Frameworks/libssl.3.dylib"
+  cp "$OPENSSL_LIB_DIR/libcrypto.3.dylib" "$APP_ROOT/Contents/Frameworks/libcrypto.3.dylib"
+  chmod 755 "$APP_ROOT/Contents/Frameworks/libssl.3.dylib" "$APP_ROOT/Contents/Frameworks/libcrypto.3.dylib"
+else
+  echo "Warning: OpenSSL 3 dylibs not found under $OPENSSL_LIB_DIR"
+fi
+
+file "$APP_ROOT/Contents/MacOS/MacNCheese" || true
+file "$APP_ROOT/Contents/Frameworks/libssl.3.dylib" || true
+file "$APP_ROOT/Contents/Frameworks/libcrypto.3.dylib" || true
+
+if [ -d "$GPTK_ROOT" ]; then
+  chmod -R u+rwX "$GPTK_ROOT"
+  find "$GPTK_ROOT" -name "*.cstemp" -delete
+  xattr -cr "$GPTK_ROOT"
+
+  while IFS= read -r -d '' f; do
+    /usr/bin/codesign --force --sign - --timestamp=none "$f"
+  done < <(find "$GPTK_ROOT" -type f \( -perm -111 -o -name "*.dylib" -o -name "*.so" \) -print0)
+
+  while IFS= read -r -d '' d; do
+    /usr/bin/codesign --force --sign - --timestamp=none "$d"
+  done < <(find "$GPTK_ROOT" -type d \( -name "*.framework" -o -name "*.app" \) -depth -print0)
+
+  if [ -d "$GPTK_APP" ]; then
+    /usr/bin/codesign --force --deep --sign - --timestamp=none "$GPTK_APP"
+    /usr/bin/codesign --verify --deep --strict --verbose=2 "$GPTK_APP"
+  fi
+fi
+
+find "$APP_ROOT" -name "*.cstemp" -delete
+xattr -cr "$APP_ROOT"
+/usr/bin/codesign --force --deep --sign - --timestamp=none "$APP_ROOT"
+/usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_ROOT"
+
+create-dmg \
+  --volname "MacNCheese" \
+  --window-pos 200 120 \
+  --window-size 660 400 \
+  --icon-size 128 \
+  --icon "MacNCheese.app" 180 185 \
+  --hide-extension "MacNCheese.app" \
+  --app-drop-link 480 185 \
+  "MacNCheese-${ARCH_NAME}.dmg" \
+  "dist/"
+
+ls -la "$APP_ROOT/Contents/MacOS/" || true
+ls -la "$APP_ROOT/Contents/gptk" || true
+ls -la "MacNCheese-${ARCH_NAME}.dmg"
+
+deactivate
