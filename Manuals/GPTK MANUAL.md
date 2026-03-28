@@ -58,7 +58,7 @@ d3d12.dll
 
 In many cases, the folder will look like this:
 
-```bash
+```
 lib/wine/x86_64-windows/
 ```
 ## Step 3 - Import the DLLs into MacNCheese
