@@ -56,7 +56,7 @@ PY
 
 chmod +x installer.sh
 
-python -m PyInstaller \
+arch -x86_64 python -m PyInstaller \
   --noconfirm \
   --clean \
   --windowed \
