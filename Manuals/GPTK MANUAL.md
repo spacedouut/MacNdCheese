@@ -59,7 +59,7 @@ In many cases, the folder will look like this:
 
 ```bashlib/wine/x86_64-windows/```
 
-##Step 3 - Import the DLLs into MacNCheese
+## Step 3 - Import the DLLs into MacNCheese
 
 Open MacNCheese, then go to:
 
@@ -73,7 +73,7 @@ Then select the extracted folder that contains the DLLs.
 
 MacNCheese will copy them into its configured GPTK directory automatically.
 
-#Step 4 — Launch with GPTK
+## Step 4 — Launch with GPTK
 
 Open your game in MacNCheese and select:
 
@@ -82,15 +82,15 @@ GPTK (D3DMetal)
 Then launch the game.
 
 
-###Manual Terminal Commands
+### Manual Terminal Commands
 
 If you want to prepare or inspect the files manually, these commands help.
 
-##Create the target directory
+## Create the target directory
 
 ```bashmkdir -p gptk/lib/wine/x86_64-windows```
 
-##Check whether the required DLLs exist in your extracted folder
+## Check whether the required DLLs exist in your extracted folder
 
 Replace /path/to/extracted/gptk with your real path:
 
@@ -106,16 +106,16 @@ cp /path/to/extracted/gptk/x86_64-windows/dxgi.dll gptk/lib/wine/x86_64-windows/
 cp /path/to/extracted/gptk/x86_64-windows/d3d11.dll gptk/lib/wine/x86_64-windows/
 cp /path/to/extracted/gptk/x86_64-windows/d3d12.dll gptk/lib/wine/x86_64-windows/
 
-##Copy optional DLLs too
+## Copy optional DLLs too
 
 cp /path/to/extracted/gptk/x86_64-windows/d3d12core.dll gptk/lib/wine/x86_64-windows/ 2>/dev/null || true
 cp /path/to/extracted/gptk/x86_64-windows/d3d10core.dll gptk/lib/wine/x86_64-windows/ 2>/dev/null || true
 
-##Verify the final target folder
+## Verify the final target folder
 
 ```ls -la gptk/lib/wine/x86_64-windows/```
 
-##Find the DLL folder automatically
+## Find the DLL folder automatically
 
 If you do not know where the DLLs are after extracting GPTK:
 
@@ -123,7 +123,7 @@ If you do not know where the DLLs are after extracting GPTK:
 
 Copy the full DLL directory manually
 
-##If you found the correct x86_64-windows folder:
+## If you found the correct x86_64-windows folder:
 ```
 mkdir -p gptk/lib/wine
 cp -R /path/to/extracted/gptk/x86_64-windows gptk/lib/wine/
@@ -149,7 +149,7 @@ MacNCheese/
 
 
 
-##Notes
+## Notes
 >GPTK backend needs the Windows DLLs, not only the .app bundle.
 >If a game still fails, remove any locally patched DXVK DLLs first.
 >MacNCheese uses WINEDLLOVERRIDES for:
@@ -165,7 +165,7 @@ MacNCheese normally handles that for you automatically.
 
 
 
-###Troubleshooting
+### Troubleshooting
 
 GPTK backend says DLLs are missing
 
