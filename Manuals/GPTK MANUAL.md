@@ -31,8 +31,8 @@ These are optional, but recommended if they are present:
 
 MacNCheese expects the DLLs to end up here:
 
-```text
-gptk/lib/wine/x86_64-windows/```
+
+gptk/lib/wine/x86_64-windows/
 
 After the DLLs are imported, select this backend in the game launcher:
 
