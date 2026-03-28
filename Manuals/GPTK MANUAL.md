@@ -42,13 +42,13 @@ Backend -> GPTK (D3DMetal)
 
 ---
 
-###Quick Setup in MacNCheese
+### Quick Setup in MacNCheese
 
-##Step 1 — Get the GPTK package
+## Step 1 — Get the GPTK package
 
 Download the GPTK package you want to use and extract it somewhere on your Mac.
 
-##Step 2 — Find the DLL folder
+## Step 2 — Find the DLL folder
 
 Inside the extracted files, locate the folder that contains:
 
