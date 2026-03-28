@@ -123,9 +123,14 @@ ensure_clt() {
     sudo_run softwareupdate -i "$product" --verbose || true
   fi
   if ! xcode-select -p >/dev/null 2>&1; then
+    echo "Triggering Xcode Command Line Tools GUI installer..."
     xcode-select --install >/dev/null 2>&1 || true
-    echo "Xcode Command Line Tools are required. Finish the macOS CLT install, then retry."
-    exit 1
+    echo "Waiting for Xcode Command Line Tools to be installed..."
+    echo "Please complete the installation in the window that just opened."
+    until xcode-select -p >/dev/null 2>&1; do
+      sleep 5
+    done
+    echo "Xcode Command Line Tools installed successfully."
   fi
 }
 
@@ -342,7 +347,7 @@ install_wine() {
     echo "wine-stable cask already installed"
   elif "$BREW_BIN" info --cask wine-stable >/dev/null 2>&1; then
     echo "Installing wine-stable cask"
-    "$BREW_BIN" install --cask --no-quarantine wine-stable || install_wine_bundle
+    "$BREW_BIN" install --cask wine-stable || install_wine_bundle
   elif "$BREW_BIN" list wine >/dev/null 2>&1; then
     echo "wine formula already installed"
   elif "$BREW_BIN" info wine >/dev/null 2>&1; then
