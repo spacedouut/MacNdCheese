@@ -18,6 +18,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional, Any
 
+try:
+    import certifi
+    _CA_FILE = certifi.where()
+except ImportError:
+    _CA_FILE = None
+
+
+def _make_ssl_context() -> ssl.SSLContext:
+    return ssl.create_default_context(cafile=_CA_FILE)
+
 
 from PyQt6.QtGui import QAction, QPixmap, QPainter, QIcon, QColor
 from PyQt6.QtCore import QObject, QProcess, QProcessEnvironment, QThread, pyqtSignal, QPoint, QRect, QSize, Qt, QEvent, QTimer, QPropertyAnimation, QEasingCurve
@@ -584,11 +594,7 @@ class SettingsDialog(QDialog):
         
         info = QPlainTextEdit()
         info.setReadOnly(True)
-        try:
-            dev_text = Path("/tmp/dev_ui_text.txt").read_text()
-            info.setPlainText(dev_text)
-        except Exception:
-            info.setPlainText("Manual installation guide could not be loaded.")
+        info.setPlainText("Developer information is not available.")
         
         layout.addWidget(info)
         return widget
@@ -2050,9 +2056,7 @@ class CoverFetcher(QThread):
 
         cdn_url = f"https://cdn.akamai.steamstatic.com/steam/apps/{self.appid}/library_600x900.jpg"
         try:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+            ctx = _make_ssl_context()
             req = urllib.request.Request(cdn_url, headers={"User-Agent": "MacNCheese"})
             with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
                 data = resp.read()
@@ -2657,8 +2661,8 @@ class UpdateChecker(QThread):
 
     def run(self):
         try:
-            ctx = ssl._create_unverified_context()
-            
+            ctx = _make_ssl_context()
+
             req = urllib.request.Request(GITHUB_LATEST_RELEASE_API, headers={'User-Agent': f'{APP_NAME}-Updater'})
             with urllib.request.urlopen(req, timeout=5, context=ctx) as response:
                 if response.status == 200:
@@ -4626,7 +4630,7 @@ class MainWindow(QMainWindow):
 
     def check_for_updates(self) -> None:
         try:
-            ctx = ssl._create_unverified_context()
+            ctx = _make_ssl_context()
             req = urllib.request.Request(
                 GITHUB_LATEST_RELEASE_API,
                 headers={"Accept": "application/vnd.github+json", "User-Agent": APP_NAME},
@@ -5515,10 +5519,18 @@ class MainWindow(QMainWindow):
             return
 
         removed_count = 0
+        known_dlls = {d.lower() for d in DXVK_DLLS + DXVK_OPTIONAL_DLLS}
+        game_dir_resolved = game.game_dir.resolve()
         try:
-            
             for p in game.game_dir.glob("**/*.dll"):
-                if p.name.lower() in [d.lower() for d in DXVK_DLLS + DXVK_OPTIONAL_DLLS]:
+                if p.is_symlink() or not p.is_file():
+                    continue
+                try:
+                    if not p.resolve().is_relative_to(game_dir_resolved):
+                        continue
+                except (ValueError, OSError):
+                    continue
+                if p.name.lower() in known_dlls:
                     p.unlink()
                     removed_count += 1
             self.log(f"Removed {removed_count} DXVK/Mesa DLLs from {game.game_dir}")
