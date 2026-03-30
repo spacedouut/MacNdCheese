@@ -1147,19 +1147,20 @@ QGroupBox::title {
 """
 
 APP_NAME = "MacNCheese"
-APP_VERSION = "v5.1.8"
+APP_VERSION = "v5.2.3"
 GITHUB_REPO = "mont127/MacNdCheese"
 GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
-DEFAULT_PREFIX = str(Path.home() / "wined")
-DEFAULT_DXVK_SRC = str(Path.home() / "DXVK-macOS")
-DEFAULT_DXVK_INSTALL = str(Path.home() / "dxvk-release")
-DEFAULT_DXVK_INSTALL32 = str(Path.home() / "dxvk-release-32")
-DEFAULT_STEAM_SETUP = str(Path.home() / "Downloads" / "SteamSetup.exe")
-DEFAULT_MESA_DIR = str(Path.home() / "mesa" / "x64")
-DEFAULT_DXMT_DIR = str(Path.home() / "dxmt")
-DEFAULT_VKD3D_DIR = str(Path.home() / "vkd3d-proton")
-DEFAULT_GPTK_DIR = str(Path(__file__).resolve().with_name("gptk"))
+DATA_ROOT = Path.home() / "Library" / "Application Support" / "MacNCheese"
+DEFAULT_PREFIX = str(DATA_ROOT / "bottles" / "wined")
+DEFAULT_DXVK_SRC = str(DATA_ROOT / "src" / "DXVK-macOS")
+DEFAULT_DXVK_INSTALL = str(DATA_ROOT / "runtime" / "dxvk")
+DEFAULT_DXVK_INSTALL32 = str(DATA_ROOT / "runtime" / "dxvk-32")
+DEFAULT_STEAM_SETUP = str(DATA_ROOT / "setup" / "SteamSetup.exe")
+DEFAULT_MESA_DIR = str(DATA_ROOT / "runtime" / "mesa")
+DEFAULT_DXMT_DIR = str(DATA_ROOT / "runtime" / "dxmt")
+DEFAULT_VKD3D_DIR = str(DATA_ROOT / "runtime" / "vkd3d")
+DEFAULT_GPTK_DIR = str(DATA_ROOT / "runtime" / "gptk")
 DEFAULT_PATCHED_WINE_APP_RESOURCES_SUBDIR = "wine-build"
 STEAM_URL = "https://steamcdn-a.akamaihd.net/client/installer/SteamSetup.exe"
 DXVK_DLLS = ("d3d11.dll", "d3d10core.dll")
@@ -4244,7 +4245,9 @@ class MainWindow(QMainWindow):
         if patched:
             return patched
 
+        portable_wine = DATA_ROOT / "runtime" / "wine" / "bin" / "wine"
         for candidate in (
+            str(portable_wine),
             shutil.which("wine64"),
             shutil.which("wine"),
             "/usr/local/bin/wine64",
@@ -4255,8 +4258,9 @@ class MainWindow(QMainWindow):
             if candidate and Path(candidate).exists():
                 return candidate
         raise FileNotFoundError(
-            "Wine not found. Install Wine or bundle a patched Wine build in Resources/wine-build."
+            f"Wine not found. MacNCheese setup expected it at {portable_wine} or in your system path."
         )
+
 
 
 
@@ -4266,7 +4270,9 @@ class MainWindow(QMainWindow):
         if patched:
             return patched
 
+        portable_ws = DATA_ROOT / "runtime" / "wine" / "bin" / "wineserver"
         for candidate in (
+            str(portable_ws),
             shutil.which("wineserver"),
             "/usr/local/bin/wineserver",
             "/opt/homebrew/bin/wineserver",
@@ -4274,8 +4280,9 @@ class MainWindow(QMainWindow):
             if candidate and Path(candidate).exists():
                 return candidate
         raise FileNotFoundError(
-            "wineserver not found. Install Wine or bundle a patched Wine build in Resources/wine-build."
+            f"wineserver not found. Expected at {portable_ws} or in your system path."
         )
+
 
     def run_commands(
         self,
@@ -4359,24 +4366,11 @@ class MainWindow(QMainWindow):
                 )
                 self.set_status("Xcode Command Line Tools required")
                 return
-            if "need sudo access on macos" in lower:
-                QMessageBox.warning(
-                    self,
-                    APP_NAME,
-                    "MacNCheese needs an Administrator macOS account for setup. Open Terminal and run 'sudo -v'. If that fails, switch to an admin account and try again.",
-                )
-                self.set_status("Administrator account required")
-                return
-            if "password was rejected" in lower:
-                QMessageBox.warning(
-                    self,
-                    APP_NAME,
-                    "The macOS password was rejected. Enter the same password you use to sign in to macOS, then try setup again.",
-                )
-                self.set_status("Incorrect macOS password")
-                return
-            QMessageBox.warning(self, APP_NAME, message)
+            
+            QMessageBox.warning(self, APP_NAME, f"Setup failed: {message}\n\nPlease check your internet connection and ensure ~/Library/Application Support is accessible.")
+            self.set_status(f"Installation failed: {message}")
             return
+
 
         from PyQt6.QtCore import QTimer
 
@@ -4527,30 +4521,9 @@ class MainWindow(QMainWindow):
             return True, out
         return False, "Xcode Command Line Tools are required before setup can continue. Run 'xcode-select --install', finish the macOS installer, then reopen MacNCheese."
 
-    def check_admin_access(self, password: str) -> tuple[bool, str]:
-        env = os.environ.copy()
-        env["MNC_SUDO_PASSWORD"] = password
-        rc, out = self._run_shell_check("printf '%s\\n' \"$MNC_SUDO_PASSWORD\" | sudo -S -k -v", env=env)
-        if rc == 0:
-            return True, ""
-        user_name = getpass.getuser()
-        groups_rc, groups_out = self._run_shell_check("id -Gn")
-        if groups_rc == 0 and "admin" not in groups_out.split():
-            return False, f"The macOS account '{user_name}' is not an Administrator account. Use an admin account, then try again."
-        return False, "The macOS password was rejected or sudo is unavailable. Enter the same password you use to sign in to macOS, then try again."
-
     def request_admin_env(self) -> Optional[dict[str, str]]:
-        password, ok = QInputDialog.getText(
-            self,
-            APP_NAME,
-            "Enter your macOS sudo password:",
-            QLineEdit.EchoMode.Password,
-        )
-        if ok and password:
-            env = os.environ.copy()
-            env["MNC_SUDO_PASSWORD"] = password
-            return env
-        return None
+        return os.environ.copy()
+
 
     def prepare_installer_env(self) -> Optional[dict[str, str]]:
         clt_ok, clt_msg = self.check_clt_installed()
@@ -4559,19 +4532,8 @@ class MainWindow(QMainWindow):
             self.set_status("Xcode Command Line Tools required")
             return None
 
-        env = self.request_admin_env()
-        if env is None:
-            self.set_status("Setup cancelled")
-            return None
+        return self.request_admin_env()
 
-        password = env.get("MNC_SUDO_PASSWORD", "")
-        admin_ok, admin_msg = self.check_admin_access(password)
-        if not admin_ok:
-            QMessageBox.warning(self, APP_NAME, admin_msg)
-            self.set_status(admin_msg)
-            return None
-
-        return env
 
     _ACTION_TITLES: dict[str, str] = {
         "install_tools": "Installing Tools",
