@@ -467,8 +467,7 @@ class SettingsDialog(QDialog):
         self.cb_install_mesa = QCheckBox("Install Mesa")
         self.cb_build_dxvk = QCheckBox("Install DXVK (64-bit)")
         self.cb_build_dxvk32 = QCheckBox("Install DXVK (32-bit)")
-        self.cb_install_gptk_full = QCheckBox("Install GPTK FULL (Experimental)")
-        self.cb_install_d3dmetal3 = QCheckBox("Install D3DMetal 3 (Prebuilt)")
+        self.cb_install_vkd3d = QCheckBox("Install VKD3D-Proton")
         self.cb_import_gptk_dlls = QCheckBox("Import GPTK DLLs")
 
         _indicator = (
@@ -483,8 +482,7 @@ class SettingsDialog(QDialog):
             (self.cb_install_mesa,      None,      False),
             (self.cb_build_dxvk,        None,      False),
             (self.cb_build_dxvk32,      None,      False),
-            (self.cb_install_gptk_full, "#FFCC00", True),
-            (self.cb_install_d3dmetal3, "#00D8D6", True),
+            (self.cb_install_vkd3d,     None,      False),
             (self.cb_import_gptk_dlls,  "#7DD3FC", True),
         ):
             color_css = f" color: {color};" if color else ""
@@ -506,8 +504,7 @@ class SettingsDialog(QDialog):
             (self.cb_install_mesa,      "install_mesa",                None),
             (self.cb_build_dxvk,        "build_dxvk",                  None),
             (self.cb_build_dxvk32,      "build_dxvk32",                None),
-            (self.cb_install_gptk_full, "install_gptk_full",           None),
-            (self.cb_install_d3dmetal3, "install_d3dmetal3",           None),
+            (self.cb_install_vkd3d,     "install_vkd3d",               None),
             (self.cb_import_gptk_dlls,  "choose_and_import_gptk_dlls", None),
         ]
 
@@ -559,17 +556,9 @@ class SettingsDialog(QDialog):
             p = _path("dxvk_install32_edit")
             return bool(p and all((p / "bin" / dll).exists() for dll in DXVK_DLLS))
 
-        def _is_gptk_full():
-            return (
-                Path("/usr/local/bin/gameportingtoolkit").exists()
-                or bool(shutil.which("gameportingtoolkit"))
-            )
-
-        def _is_d3dmetal3():
-            return (
-                Path.home() / "gptk3" / "Game Porting Toolkit.app"
-                / "Contents" / "Resources" / "wine" / "bin" / "wine64"
-            ).exists()
+        def _is_vkd3d():
+            p = _path("vkd3d_dir_edit")
+            return bool(p and (p / "d3d12.dll").exists())
 
         def _is_gptk_dlls():
             p = _path("gptk_dir_edit")
@@ -580,8 +569,8 @@ class SettingsDialog(QDialog):
 
         states = [
             _is_tools(), _is_wine(), _is_mesa(),
-            _is_dxvk(), _is_dxvk32(),
-            _is_gptk_full(), _is_d3dmetal3(), _is_gptk_dlls(),
+            _is_dxvk(), _is_dxvk32(), _is_vkd3d(),
+            _is_gptk_dlls(),
         ]
         for (cb, _, _), checked in zip(self._component_actions, states):
             cb.setChecked(checked)
@@ -1165,7 +1154,7 @@ QGroupBox::title {
 """
 
 APP_NAME = "MacNCheese"
-APP_VERSION = "v5.2.3"
+APP_VERSION = "v5.3.0"
 GITHUB_REPO = "mont127/MacNdCheese"
 GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
@@ -1181,8 +1170,8 @@ DEFAULT_VKD3D_DIR = str(DATA_ROOT / "runtime" / "vkd3d")
 DEFAULT_GPTK_DIR = str(DATA_ROOT / "runtime" / "gptk")
 DEFAULT_PATCHED_WINE_APP_RESOURCES_SUBDIR = "wine-build"
 STEAM_URL = "https://steamcdn-a.akamaihd.net/client/installer/SteamSetup.exe"
-DXVK_DLLS = ("d3d11.dll", "d3d10core.dll")
-DXVK_OPTIONAL_DLLS = ("dxgi.dll",)
+DXVK_DLLS = ("d3d11.dll", "dxgi.dll", "d3d10.dll")
+DXVK_OPTIONAL_DLLS = ()
 GPTK_REQUIRED_DLLS = ("dxgi.dll", "d3d11.dll", "d3d12.dll")
 GPTK_OPTIONAL_DLLS = ("d3d12core.dll", "d3d10core.dll")
 
@@ -1198,8 +1187,7 @@ LAUNCH_BACKEND_MESA_ZINK = "mesa:zink"
 LAUNCH_BACKEND_MESA_SWR = "mesa:swr"
 LAUNCH_BACKEND_VKD3D = "vkd3d-proton"
 LAUNCH_BACKEND_GPTK = "gptk"
-LAUNCH_BACKEND_GPTK_FULL = "gptk_full"
-LAUNCH_BACKEND_D3DMETAL3 = "d3dmetal3"
+
 
 MESA_DRIVER_LLVMPIPE = "llvmpipe"
 MESA_DRIVER_ZINK = "zink"
@@ -1215,8 +1203,6 @@ LAUNCH_BACKENDS = (
     ("Mesa zink (GPU, Vulkan)", LAUNCH_BACKEND_MESA_ZINK),
     ("Mesa swr (CPU rasterizer)", LAUNCH_BACKEND_MESA_SWR),
     ("GPTK (D3DMetal)", LAUNCH_BACKEND_GPTK),
-    ("GPTK Full (Apple Toolkit)", LAUNCH_BACKEND_GPTK_FULL),
-    ("D3DMetal 3 (Prebuilt GPTK)", LAUNCH_BACKEND_D3DMETAL3),
 )
 
 
@@ -1450,7 +1436,7 @@ class MesaBackend(Backend):
     driver = MESA_DRIVER_LLVMPIPE
 
     def is_available(self, prefix: PrefixModel, game: GameModel, window: "MainWindow") -> bool:
-        return (window.mesa_dir / "opengl32.dll").exists()
+        return any((window.mesa_dir / p / "opengl32.dll").exists() for p in ("", "x64", "x86"))
 
     def prepare_game(self, prefix: PrefixModel, game: GameModel, window: "MainWindow") -> dict[str, Any]:
         current = window.selected_game()
@@ -1609,86 +1595,7 @@ class GptkBackend(Backend):
         env.pop("MESA_GLTHREAD", None)
         return env
 
-class GptkFullBackend(Backend):
-    backend_id = LAUNCH_BACKEND_GPTK_FULL
-    label = "GPTK Full (Apple Toolkit)"
 
-    def is_available(self, prefix: PrefixModel, game: GameModel, window: "MainWindow") -> bool:
-        return Path("/usr/local/bin/gameportingtoolkit").exists() or shutil.which("gameportingtoolkit") is not None
-
-    def prepare_game(self, prefix: PrefixModel, game: GameModel, window: "MainWindow") -> dict[str, Any]:
-        if not self.is_available(prefix, game, window):
-            raise RuntimeError("GPTK (gameportingtoolkit) not found. Install GPTK Full from Settings -> Setup first.")
-        window.unpatch_selected_game()
-        return {"kind": "gptk_full"}
-
-    def apply_env(self, env: dict[str, str], game: GameModel, prefix: PrefixModel, window: "MainWindow") -> dict[str, str]:
-        env = super().apply_env(env, game, prefix, window)
-        env["WINEPREFIX"] = str(prefix.path)
-        env["WINESERVER"] = window.wineserver_binary()
-        return env
-
-    def launch_command(self, game: GameModel, prefix: PrefixModel) -> list[str]:
-        gptk_bin = "/usr/local/bin/gameportingtoolkit"
-        if not Path(gptk_bin).exists():
-            raise FileNotFoundError("gameportingtoolkit not found in /usr/local/bin. Install GPTK Full first.")
-        if game.exe_path is None:
-            raise ValueError("Executable path is required for GPTK Full backend.")
-        cmd = ["arch", "-x86_64", gptk_bin, str(prefix.path), str(game.exe_path)]
-        
-        
-        
-        return cmd
-
-class D3DMetal3Backend(Backend):
-    backend_id = LAUNCH_BACKEND_D3DMETAL3
-    label = "D3DMetal 3 (Prebuilt GPTK)"
-
-    def is_available(self, prefix: PrefixModel, game: GameModel, window: "MainWindow") -> bool:
-        gptk3_root = Path.home() / "gptk3" / "Game Porting Toolkit.app"
-        wine64 = gptk3_root / "Contents" / "Resources" / "wine" / "bin" / "wine64"
-        return wine64.exists()
-
-    def prepare_game(self, prefix: PrefixModel, game: GameModel, window: "MainWindow") -> dict[str, Any]:
-        if not self.is_available(prefix, game, window):
-            raise RuntimeError("D3DMetal 3 (Prebuilt GPTK) not found. Install it first.")
-        window.unpatch_selected_game()
-        return {"kind": "d3dmetal3"}
-
-    def apply_env(self, env: dict[str, str], game: GameModel, prefix: PrefixModel, window: "MainWindow") -> dict[str, str]:
-        env = super().apply_env(env, game, prefix, window)
-        env["WINEPREFIX"] = str(prefix.path)
-        env["WINESERVER"] = window.wineserver_binary()
-
-        gptk3_root = Path.home() / "gptk3" / "Game Porting Toolkit.app"
-        wine_res = gptk3_root / "Contents" / "Resources" / "wine"
-        lib_dir = wine_res / "lib"
-        unix_lib_dir = lib_dir / "wine" / "x86_64-unix"
-        external_lib_dir = lib_dir / "external"
-        dyld_paths = [str(unix_lib_dir), str(lib_dir), str(external_lib_dir)]
-        env["DYLD_LIBRARY_PATH"] = ":".join(dyld_paths)
-        env["WINEPATH"] = str(wine_res / "bin")
-        env["DYLD_SHARED_REGION"] = "avoid"
-        overrides = env.get("WINEDLLOVERRIDES", "")
-        m3_ovr = "d3d11,d3d12,dxgi=n"
-        if overrides:
-            overrides += f";{m3_ovr}"
-        else:
-            overrides = m3_ovr
-        env["WINEDLLOVERRIDES"] = overrides
-        env["WINEDEBUG"] = "-all"
-        env["WINEESYNC"] = "1"
-        return env
-
-    def launch_command(self, game: GameModel, prefix: PrefixModel) -> list[str]:
-        gptk3_root = Path.home() / "gptk3" / "Game Porting Toolkit.app"
-        wine64 = gptk3_root / "Contents" / "Resources" / "wine" / "bin" / "wine64"
-        if not wine64.exists():
-            raise FileNotFoundError(f"D3DMetal 3 wine64 not found at {wine64}. Install D3DMetal 3 (Prebuilt) first.")
-        if game.exe_path is None:
-            raise ValueError("Executable path is required for D3DMetal 3 backend.")
-
-        return ["arch", "-x86_64", str(wine64), str(game.exe_path)]
 
 
 class AutoBackend(Backend):
@@ -1997,7 +1904,7 @@ class CommandWorker(QObject):
                 if self._cancelled:
                     self.finished.emit(False, 'Cancelled')
                     return
-                self.output.emit(f"$ {' '.join(cmd)}")
+                self.output.emit(f"$ {shlex.join(cmd)}")
                 self._proc = subprocess.Popen(
                     cmd, 
                     cwd=self.cwd, 
@@ -2016,7 +1923,7 @@ class CommandWorker(QObject):
                     self.finished.emit(False, 'Cancelled')
                     return
                 if rc != 0:
-                    self.finished.emit(False, f"Command failed with exit code {rc}: {' '.join(cmd)}")
+                    self.finished.emit(False, f"Command failed with exit code {rc}: {shlex.join(cmd)}")
                     return
             self.finished.emit(True, 'Done')
         except Exception as exc:
@@ -3017,8 +2924,6 @@ class MainWindow(QMainWindow):
             Vkd3dProtonBackend(),
             DxmtBackend(),
             GptkBackend(),
-            GptkFullBackend(),
-            D3DMetal3Backend(),
         ):
             self.backend_registry.register(backend)
         self.backend_registry.register(AutoBackend(self.backend_registry))
@@ -3038,20 +2943,18 @@ class MainWindow(QMainWindow):
         exe_name = game.exe_path.name.lower() if game.exe_path else ""
 
         
-        gptk3 = self.backend_registry.get(LAUNCH_BACKEND_D3DMETAL3)
         prefix = self.current_prefix_model()
-        has_gptk3 = bool(gptk3 and gptk3.is_available(prefix, game, self))
 
         if "poppy playtime" in token or "poppy_playtime" in exe_name or "project playtime" in token or "project_playtime" in exe_name:
-            return LAUNCH_BACKEND_D3DMETAL3 if has_gptk3 else LAUNCH_BACKEND_DXVK
+            return LAUNCH_BACKEND_DXVK
         if "mewgenics" in token:
             return LAUNCH_BACKEND_MESA_LLVMPIPE
         if "enlisted" in token or exe_name == "enlisted.exe" or exe_name == "enlisted-min-cpu.exe":
-            return LAUNCH_BACKEND_VKD3D if not has_gptk3 else LAUNCH_BACKEND_D3DMETAL3
+            return LAUNCH_BACKEND_VKD3D
         if (game.install_path / "D3D12").exists():
-            return LAUNCH_BACKEND_D3DMETAL3 if has_gptk3 else LAUNCH_BACKEND_VKD3D
-            
-        return LAUNCH_BACKEND_D3DMETAL3 if has_gptk3 else LAUNCH_BACKEND_DXVK
+            return LAUNCH_BACKEND_VKD3D
+
+        return LAUNCH_BACKEND_DXVK
 
     def available_backends(self) -> list[tuple[str, str]]:
         """Return (label, backend_id) for Auto plus every installed backend."""
@@ -3068,8 +2971,10 @@ class MainWindow(QMainWindow):
                 try:
                     if backend.is_available(prefix, dummy, self):
                         result.append((label, backend_id))
+                    else:
+                        result.append((f"{label} (Not Installed)", backend_id))
                 except Exception:
-                    pass
+                    result.append((f"{label} (Not Installed)", backend_id))
         return result
 
     def resolve_backend(self, backend_id: str, game: GameModel, prefix: PrefixModel) -> Backend:
@@ -4355,6 +4260,9 @@ class MainWindow(QMainWindow):
 
     def on_worker_finished(self, ok: bool, message: str) -> None:
         completed_action = self.interactive_install_action
+        post_action = getattr(self, "pending_post_install_action", None)
+        self.pending_post_install_action = None
+
         self.set_status(message if ok else f"Failed: {message}")
         self.interactive_install_in_progress = False
         if self._progress_dlg is not None:
@@ -4371,7 +4279,6 @@ class MainWindow(QMainWindow):
         if not self.missing_core_tools():
             self.interactive_install_in_progress = False
             self.interactive_install_action = None
-            self.pending_post_install_action = None
         if not ok:
             lower = message.lower()
             if lower == "cancelled":
@@ -4416,6 +4323,12 @@ class MainWindow(QMainWindow):
             self.log("SteamSetup downloaded. Opening interactively...")
             self._open_steamsetup_pending = False
             QTimer.singleShot(300, self.open_steamsetup)
+
+        # Handle pending post-install actions (e.g. init_prefix after quick_setup)
+        if ok and post_action:
+            self.log(f"Action '{completed_action}' finished. Running post-action: {post_action}...")
+            # Use a slightly longer delay to ensure UI transitions smoothly
+            QTimer.singleShot(1500, lambda: self.run_installer_action(post_action))
 
         # Handle pending bottle exe after tool install
         pending_exe = getattr(self, "_pending_bottle_exe", None)
@@ -4472,10 +4385,17 @@ class MainWindow(QMainWindow):
         missing: list[str] = []
         if not self.has_wine():
             missing.append("Wine")
-        if not (self.dxvk_install / "bin" / "d3d11.dll").exists():
+        
+        # Check for DXVK DLL (could be in bin/, x64/, or root)
+        dxvk_found = any((self.dxvk_install / p / "d3d11.dll").exists() for p in ("", "bin", "x64"))
+        if not dxvk_found:
             missing.append("DXVK")
-        if not (self.mesa_dir / "opengl32.dll").exists():
+            
+        # Check for Mesa DLL (could be in x64/ or root)
+        mesa_found = any((self.mesa_dir / p / "opengl32.dll").exists() for p in ("", "x64", "x86"))
+        if not mesa_found:
             missing.append("Mesa")
+            
         return missing
 
     def installer_script_path(self) -> Path:
@@ -4595,10 +4515,11 @@ class MainWindow(QMainWindow):
             str(self.dxvk_install32),
             str(self.mesa_dir),
             DEFAULT_MESA_URL,
+            str(self.vkd3d_dir),
+            "",
         ]
         title = self._ACTION_TITLES.get(action, f"Running: {action}")
         self.run_commands([args], env=env, cwd=str(script.parent), progress_title=title)
-
 
     def _version_tuple(self, value: str) -> tuple[int, ...]:
         cleaned = value.strip().lower().lstrip("v")
@@ -4659,14 +4580,10 @@ class MainWindow(QMainWindow):
         self.run_installer_action("install_dxmt")
     def install_vkd3d(self) -> None:
         self.run_installer_action("install_vkd3d")
-    def quick_setup(self) -> None:
-        self.run_installer_action("quick_setup")
+    def quick_setup(self, *, post_action: Optional[str] = None) -> None:
+        self.run_installer_action("quick_setup", post_action=post_action)
 
-    def install_gptk_full(self) -> None:
-        self.run_installer_action("install_gptk_full")
 
-    def install_d3dmetal3(self) -> None:
-        self.run_installer_action("install_d3dmetal3")
 
     def _build_dxvk(self, *, arch: str) -> None:
         action = "build_dxvk64" if arch == "win64" else "build_dxvk32"
@@ -4720,29 +4637,36 @@ class MainWindow(QMainWindow):
             return base + extras
         return base
 
+    def _get_mesa_bin_dir(self) -> Path:
+        for p in ("x64", "x86", ""):
+            if (self.mesa_dir / p / "opengl32.dll").exists():
+                return self.mesa_dir / p
+        return self.mesa_dir
+
     def patch_selected_game_with_mesa(self, game: GameEntry, exe: Path, *, driver: str) -> str:
         
         wanted = driver
+        mesa_bin = self._get_mesa_bin_dir()
 
         dlls = self.mesa_runtime_dlls_for_driver(wanted)
-        missing = [dll for dll in dlls if not (self.mesa_dir / dll).exists()]
+        missing = [dll for dll in dlls if not (mesa_bin / dll).exists()]
         if missing:
             
             if wanted in (MESA_DRIVER_ZINK, MESA_DRIVER_SWR):
                 self.log(f"Mesa: missing {', '.join(missing)} for '{wanted}', falling back to llvmpipe")
                 wanted = MESA_DRIVER_LLVMPIPE
                 dlls = self.mesa_runtime_dlls_for_driver(wanted)
-                missing = [dll for dll in dlls if not (self.mesa_dir / dll).exists()]
+                missing = [dll for dll in dlls if not (mesa_bin / dll).exists()]
 
         if missing:
             raise FileNotFoundError(
-                f"Missing Mesa DLL(s) in {self.mesa_dir}: {', '.join(missing)}\n\n"
+                f"Missing Mesa DLL(s) in {mesa_bin}: {', '.join(missing)}\n\n"
                 "Please install/extract Mesa x64 to this folder or use the 'Install Mesa' menu option."
             )
 
         
         optional: list[str] = []
-        if wanted == MESA_DRIVER_ZINK and (self.mesa_dir / "zink_dri.dll").exists():
+        if wanted == MESA_DRIVER_ZINK and (mesa_bin / "zink_dri.dll").exists():
             optional.append("zink_dri.dll")
 
         target_dirs: set[Path] = {game.game_dir, exe.parent}
@@ -4759,9 +4683,9 @@ class MainWindow(QMainWindow):
                         pass
 
             for dll in dlls:
-                shutil.copy2(self.mesa_dir / dll, tdir / dll)
+                shutil.copy2(mesa_bin / dll, tdir / dll)
             for dll in optional:
-                shutil.copy2(self.mesa_dir / dll, tdir / dll)
+                shutil.copy2(mesa_bin / dll, tdir / dll)
 
             copied = list(dlls) + optional
             self.log(f"Copied Mesa ({wanted}) DLLs -> {tdir}: {', '.join(copied)}")
@@ -4778,7 +4702,12 @@ class MainWindow(QMainWindow):
         p = Path(DEFAULT_PREFIX).expanduser()
         if not p.exists():
             self.log(f"Auto-creating default Steam prefix at {p}...")
-            self.run_installer_action("init_prefix")
+            if self.missing_core_tools():
+                self.log("Dependencies missing for prefix initialization. Running quick setup first...")
+                self.quick_setup(post_action="init_prefix")
+            else:
+                self.run_installer_action("init_prefix")
+
 
     def clean_prefix(self) -> None:
         wine = self.ensure_wine()
@@ -4925,7 +4854,7 @@ class MainWindow(QMainWindow):
 
         wine_ok = self.has_wine()
         dxvk_ok = (self.dxvk_install / "bin" / "d3d11.dll").exists()
-        mesa_ok = (self.mesa_dir / "opengl32.dll").exists()
+        mesa_ok = any((self.mesa_dir / p / "opengl32.dll").exists() for p in ("", "x64", "x86"))
 
         steam_installed = (self.steam_dir / "steam.exe").exists()
 
@@ -5101,7 +5030,12 @@ class MainWindow(QMainWindow):
     def scan_games(self) -> None:
         p = self.prefix_path
         s = self.steam_dir
-        worker = self._scanner_worker
+        
+        # Guard against destroyed state or missing paths
+        if not p or not s:
+            return
+
+        worker = getattr(self, "_scanner_worker", None)
         if worker is not None and worker.isRunning():
             if worker.prefix == p:
                 return
@@ -5109,7 +5043,8 @@ class MainWindow(QMainWindow):
                 worker.finished_scan.disconnect(self._on_scan_finished)
             except Exception:
                 pass
-            worker.deleteLater()
+            worker.quit()
+            worker.wait(500) # Give it a moment to stop gracefully
 
         new_worker = LibraryScannerWorker(p, s)
         new_worker.finished_scan.connect(self._on_scan_finished)
@@ -5596,8 +5531,7 @@ class MainWindow(QMainWindow):
                 effective_backend = LAUNCH_BACKEND_DXMT
             elif kind == "gptk":
                 effective_backend = LAUNCH_BACKEND_GPTK
-            elif kind == "d3dmetal3":
-                effective_backend = LAUNCH_BACKEND_D3DMETAL3
+
 
         
         backend_cmd = resolved_backend.launch_command(game_model, prefix_model)
@@ -5611,12 +5545,33 @@ class MainWindow(QMainWindow):
         self.log(f"Requested backend: {backend_id}")
         self.log(f"Resolved backend: {effective_backend}")
         self.log(f"Runner binary: {wine_bin}")
-        if effective_backend == LAUNCH_BACKEND_GPTK or effective_backend == LAUNCH_BACKEND_D3DMETAL3:
-            self.log(f"GPTK/D3DMetal DLL dir: {self.gptk_windows_dir}")
+        if effective_backend == LAUNCH_BACKEND_GPTK:
+            self.log(f"GPTK DLL dir: {self.gptk_windows_dir}")
 
         if self.game_process and self.game_process.state() != QProcess.ProcessState.NotRunning:
             QMessageBox.warning(self, APP_NAME, "A game process is already running.")
             return
+
+        if game.appid and (not self.steam_process or self.steam_process.state() == QProcess.ProcessState.NotRunning):
+            self.log("Steam is not running. Launching Steam implicitly before the game (no backend overrides).")
+            self.launch_steam(backend=None)
+            
+            from PyQt6.QtWidgets import QProgressDialog
+            progress = QProgressDialog("Warming up Steam background processes...", "Cancel", 0, 100, self)
+            progress.setWindowTitle("Launching Steam")
+            progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+            progress.setMinimumDuration(0)
+            progress.setValue(0)
+            
+            for i in range(100):
+                if progress.wasCanceled():
+                    self.set_status("Game launch cancelled.")
+                    return
+                progress.setValue(i)
+                time.sleep(0.1)
+                QCoreApplication.processEvents()
+            
+            progress.setValue(100)
 
         self.game_process = QProcess(self)
         env = self.wine_env()
@@ -5632,11 +5587,6 @@ class MainWindow(QMainWindow):
         env["DXVK_LOG_LEVEL"] = "info"
         env["DXVK_ASYNC"] = "1"
         env["DXVK_ENABLE_NVAPI"] = "0"
-        try:
-            subprocess.run([self.wineserver_binary(), "-k"], env=env, timeout=5)
-            time.sleep(2)
-        except Exception:
-            pass
         if self.backend_is_mesa(effective_backend) and not effective_mesa_driver:
             effective_mesa_driver = self.mesa_driver_from_backend(effective_backend)
 
@@ -5668,28 +5618,20 @@ class MainWindow(QMainWindow):
         self.last_game_launch_ts[game.appid] = time.time()
         self.last_game_wine_log[game.appid] = Path(host_wine_log)
 
-        
-        if effective_backend == LAUNCH_BACKEND_GPTK_FULL:
-            gptk_script = "/usr/local/bin/gameportingtoolkit" if Path("/usr/local/bin/gameportingtoolkit").exists() else "gameportingtoolkit"
-            cmd = f"arch -x86_64 {shlex.quote(gptk_script)} {shlex.quote(str(prefix_model.path))} {shlex.quote(str(exe))} { ' '.join(shlex.quote(a) for a in args) } > {shlex.quote(host_wine_log)} 2>&1"
-        else:
-            
-            backend_cmd = resolved_backend.launch_command(game_model, prefix_model)
-            
-            
-            if len(backend_cmd) >= 3:
-                
-                wine_binary_to_use = backend_cmd[2]
-                arch_prefix = "arch -x86_64" if backend_cmd[0] == "arch" else ""
-            else:
-                wine_binary_to_use = self.wine_binary() or "wine"
-                arch_prefix = "arch -x86_64"
+        backend_cmd = resolved_backend.launch_command(game_model, prefix_model)
 
-            debug_prefix = "WINEDEBUG=+loaddll"
-            if self.backend_is_mesa(effective_backend):
-                debug_prefix = "WINEDEBUG=+loaddll,+wgl,+opengl"
-            
-            cmd = f"cd {shlex.quote(str(exe_dir))} && {debug_prefix} {arch_prefix} {shlex.quote(str(wine_binary_to_use))} { ' '.join(shlex.quote(a) for a in args) } > {shlex.quote(host_wine_log)} 2>&1"
+        if len(backend_cmd) >= 3:
+            wine_binary_to_use = backend_cmd[2]
+            arch_prefix = "arch -x86_64" if backend_cmd[0] == "arch" else ""
+        else:
+            wine_binary_to_use = self.wine_binary() or "wine"
+            arch_prefix = "arch -x86_64"
+
+        debug_prefix = "WINEDEBUG=+loaddll"
+        if self.backend_is_mesa(effective_backend):
+            debug_prefix = "WINEDEBUG=+loaddll,+wgl,+opengl"
+
+        cmd = f"cd {shlex.quote(str(exe_dir))} && {debug_prefix} {arch_prefix} {shlex.quote(str(wine_binary_to_use))} { ' '.join(shlex.quote(a) for a in args) } > {shlex.quote(host_wine_log)} 2>&1"
 
         self.game_process.setProgram("bash")
         self.game_process.setArguments(["-lc", cmd])
@@ -5697,9 +5639,7 @@ class MainWindow(QMainWindow):
         self.game_process.readyReadStandardError.connect(lambda: self._drain_process(self.game_process))
         
         backend_label = "Wine builtin"
-        if effective_backend == LAUNCH_BACKEND_GPTK_FULL: backend_label = "GPTK Full"
-        elif effective_backend == LAUNCH_BACKEND_D3DMETAL3: backend_label = "D3DMetal 3"
-        elif effective_backend == LAUNCH_BACKEND_DXVK: backend_label = "DXVK"
+        if effective_backend == LAUNCH_BACKEND_DXVK: backend_label = "DXVK"
         elif effective_backend == LAUNCH_BACKEND_VKD3D: backend_label = "VKD3D-Proton"
         elif effective_backend == LAUNCH_BACKEND_DXMT: backend_label = "DXMT"
         elif self.backend_is_mesa(effective_backend): backend_label = f"Mesa {effective_mesa_driver}"
