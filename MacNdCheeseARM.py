@@ -1159,8 +1159,57 @@ QGroupBox::title {
 }
 """
 
+
+class WineSetupDialog(QDialog):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("MacNCheese - Wine Required")
+        self.setFixedWidth(500)
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setSpacing(20)
+        layout.setContentsMargins(30, 30, 30, 30)
+
+        title = QLabel("Wine Installation Required")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #FFFFFF;")
+        layout.addWidget(title)
+
+        msg = QLabel("A Wine installation is required to launch games. You can extracts a pre-built portable archive (.tar.xz) or point to an existing Wine binary on your system.")
+        msg.setWordWrap(True)
+        msg.setStyleSheet("color: rgba(255, 255, 255, 0.8);")
+        layout.addWidget(msg)
+
+        btn_archive = QPushButton("Install from Portable Archive (.tar.xz)")
+        btn_archive.setFixedHeight(40)
+        btn_archive.clicked.connect(self.accept_archive)
+        layout.addWidget(btn_archive)
+
+        btn_pick = QPushButton("Select Existing Binary (wine / wine64)")
+        btn_pick.setFixedHeight(40)
+        btn_pick.clicked.connect(self.accept_pick)
+        layout.addWidget(btn_pick)
+
+        hint = QLabel("Note: If you just built Wine 11.3, select 'Install from Portable Archive' and pick the .tar.xz file you created.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: rgba(255,255,255,0.4); font-size: 11px; font-style: italic;")
+        layout.addWidget(hint)
+
+        btn_close = QPushButton("Set Up Later")
+        btn_close.setFlat(True)
+        btn_close.clicked.connect(self.reject)
+        layout.addWidget(btn_close)
+
+    def accept_archive(self) -> None:
+        self.done(10) # Custom code for archive
+
+    def accept_pick(self) -> None:
+        self.done(20) # Custom code for pick
+
 APP_NAME = "MacNCheese"
-APP_VERSION = "v5.3.9"
+
+APP_VERSION = "v5.4.0"
 GITHUB_REPO = "mont127/MacNdCheese"
 GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
@@ -2666,6 +2715,77 @@ class MainWindow(QMainWindow):
         self.log(f"{APP_NAME} ready")
         self._sync_sidebar_prefix_buttons()
         QTimer.singleShot(500, self._ensure_default_prefix)
+        QTimer.singleShot(1500, self.check_wine_at_startup)
+
+    def check_wine_at_startup(self) -> None:
+        if not self.has_wine():
+            self.log("Wine not found at startup. Prompting for setup.")
+            self.install_wine()
+
+    def install_wine(self) -> None:
+        dlg = WineSetupDialog(self)
+        res = dlg.exec()
+        if res == 10:
+            self.prompt_install_wine_archive()
+        elif res == 20:
+            self.prompt_pick_wine_binary()
+
+    def prompt_install_wine_archive(self) -> None:
+        archive_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Wine Portable Archive", str(Path.home()), "Archives (*.tar.xz *.tar.gz *.tar)"
+        )
+        if not archive_path:
+            return
+        
+        # Default destination for manual wine
+        dest_dir = DATA_ROOT / "runtime" / "wine-11.3"
+        if dest_dir.exists():
+             reply = QMessageBox.question(self, "Overwrite", f"Directory {dest_dir} already exists. Overwrite?",
+                                          QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+             if reply == QMessageBox.StandardButton.No:
+                 return
+        
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        
+        from PyQt6.QtWidgets import QProgressDialog
+        progress = QProgressDialog("Extracting Wine...", "Cancel", 0, 0, self)
+        progress.setWindowTitle("MacNCheese Installer")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.show()
+        QApplication.processEvents()
+
+        try:
+            # Run tar via subprocess
+            cmd = ["tar", "-xJf", str(archive_path), "-C", str(dest_dir)]
+            subprocess.check_call(cmd)
+            
+            # Find the binary
+            wine_bin = dest_dir / "bin" / "wine64"
+            if not wine_bin.exists():
+                wine_bin = dest_dir / "bin" / "wine"
+            
+            if wine_bin.exists():
+                self.wine_bin_edit.setText(str(wine_bin))
+                self.save_user_settings()
+                QMessageBox.information(self, "Success", f"Wine installed successfully to:\n{dest_dir}")
+                self.log(f"Manual wine installed: {wine_bin}")
+            else:
+                QMessageBox.critical(self, "Error", f"Could not find bin/wine or bin/wine64 in extracted archive at {dest_dir}")
+        except Exception as e:
+            QMessageBox.critical(self, "Extraction Failed", f"Failed to extract Wine archive:\n{e}")
+        finally:
+            progress.close()
+
+    def prompt_pick_wine_binary(self) -> None:
+        binary_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Wine Binary", "/usr/local/bin", "Executables (*)"
+        )
+        if binary_path:
+            self.wine_bin_edit.setText(binary_path)
+            self.save_user_settings()
+            QMessageBox.information(self, "Success", f"Wine path set to: {binary_path}")
+            self.log(f"Manual wine path set: {binary_path}")
+
 
     def load_user_settings(self) -> None:
         self.user_settings_path = Path.home() / ".macncheese_settings.json"
