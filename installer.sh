@@ -56,11 +56,35 @@ download_file() {
 }
 
 bootstrap_tools() {
-    if ! command -v 7z >/dev/null 2>&1 || ! command -v zstd >/dev/null 2>&1; then
-        echo "Bootstrapping tools (7z, zstd) into $MNC_BIN_DIR..."
+    is_tool_working() {
+        tool_cmd="$1"
+        if ! command -v "$tool_cmd" >/dev/null 2>&1; then return 1; fi
+        
+        if "$tool_cmd" --help 2>&1 | grep -q "Homebrew"; then return 1; fi
+        
+        if [ "$tool_cmd" = "7z" ] || [ "$tool_cmd" = "7zz" ]; then
+             "$tool_cmd" 2>&1 | grep -q "7-Zip" || return 1
+        fi
+        return 0
+    }
+
+    if ! is_tool_working "7z" && ! is_tool_working "7zz"; then
+        echo "Bootstrapping official 7zz (statically linked) into $MNC_BIN_DIR..."
+        official_7z_url="https://www.7-zip.org/a/7z2408-mac.tar.xz"
+        archive="$WORK_DIR/7z-official.tar.xz"
+        download_file "$official_7z_url" "$archive"
+        
+        tar -xJf "$archive" -C "$MNC_BIN_DIR" 7zz
+        chmod +x "$MNC_BIN_DIR/7zz"
+        ln -sf "$MNC_BIN_DIR/7zz" "$MNC_BIN_DIR/7z"
+    fi
+
+    if ! is_tool_working "zstd"; then
+        echo "Bootstrapping tools archive from GitHub into $MNC_BIN_DIR..."
         archive="$WORK_DIR/tools.tar.gz"
         download_file "$TOOLS_URL" "$archive"
         tar -xzf "$archive" -C "$MNC_BIN_DIR"
+        chmod +x "$MNC_BIN_DIR/zstd" 2>/dev/null || true
     fi
 }
 
