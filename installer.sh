@@ -68,6 +68,14 @@ bootstrap_tools() {
         return 0
     }
 
+    if ! is_tool_working "zstd"; then
+        echo "Bootstrapping tools archive from GitHub into $MNC_BIN_DIR..."
+        archive="$WORK_DIR/tools.tar.gz"
+        download_file "$TOOLS_URL" "$archive"
+        tar -xzf "$archive" -C "$MNC_BIN_DIR"
+        chmod +x "$MNC_BIN_DIR/zstd" 2>/dev/null || true
+    fi
+
     if ! is_tool_working "7z" && ! is_tool_working "7zz"; then
         echo "Bootstrapping official 7zz (statically linked) into $MNC_BIN_DIR..."
         official_7z_url="https://www.7-zip.org/a/7z2408-mac.tar.xz"
@@ -77,14 +85,6 @@ bootstrap_tools() {
         tar -xJf "$archive" -C "$MNC_BIN_DIR" 7zz
         chmod +x "$MNC_BIN_DIR/7zz"
         ln -sf "$MNC_BIN_DIR/7zz" "$MNC_BIN_DIR/7z"
-    fi
-
-    if ! is_tool_working "zstd"; then
-        echo "Bootstrapping tools archive from GitHub into $MNC_BIN_DIR..."
-        archive="$WORK_DIR/tools.tar.gz"
-        download_file "$TOOLS_URL" "$archive"
-        tar -xzf "$archive" -C "$MNC_BIN_DIR"
-        chmod +x "$MNC_BIN_DIR/zstd" 2>/dev/null || true
     fi
 }
 
