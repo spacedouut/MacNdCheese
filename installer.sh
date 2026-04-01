@@ -170,8 +170,11 @@ build_dxvk32() {
 
 find_wine_bin() {
     portable_wine="$MNC_RUNTIME_DIR/wine/bin/wine"
+    portable_wine64="$MNC_RUNTIME_DIR/wine/bin/wine64"
     if [ -x "$portable_wine" ]; then
         echo "$portable_wine"
+    elif [ -x "$portable_wine64" ]; then
+        echo "$portable_wine64"
     else
         command -v wine64 || command -v wine || echo ""
     fi
