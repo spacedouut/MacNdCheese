@@ -7,17 +7,28 @@ PORTABLE_DIR="${HOME}/Library/Application Support/MacNCheese/deps"
 export PATH="$PORTABLE_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:$PATH"
 
 
+for app in "Wine Stable.app" "Wine Staging.app"; do
+  if [ -d "$PORTABLE_DIR/$app" ]; then
+    WINE_APP_BIN="$PORTABLE_DIR/$app/Contents/Resources/wine/bin"
+    if [ -d "$WINE_APP_BIN" ]; then
+      export PATH="$WINE_APP_BIN:$PATH"
+    fi
+  fi
+done
+
+
 GIT_BIN="git"
 WGET_BIN="wget"
 SEVENZ_BIN="7z"
+if [ -x "$PORTABLE_DIR/bin/7zz" ]; then SEVENZ_BIN="$PORTABLE_DIR/bin/7zz"; fi
 
 
 if [ -x "$PORTABLE_DIR/bin/git" ]; then
- 
+  
   if "$PORTABLE_DIR/bin/git" remote-https --help >/dev/null 2>&1 || [ -f "$PORTABLE_DIR/libexec/git-core/git-remote-https" ]; then
     GIT_BIN="$PORTABLE_DIR/bin/git"
   else
-
+   
     if command -v git >/dev/null 2>&1; then
       GIT_BIN="$(command -v git)"
     fi
@@ -50,7 +61,7 @@ PORTABLE_BASE_URL="https://github.com/mont127/CheeseInstallation/releases/downlo
 PORTABLE_DEPS_URL="$PORTABLE_BASE_URL/macncheese_deps_arm64.zip"
 PORTABLE_WINE_URL="$PORTABLE_BASE_URL/wine_arm64.tar.xz"
 
-
+# (PORTABLE_DIR and PATH handled at top)
 WORK_DIR="$(mktemp -d /tmp/macncheese-installer.XXXXXX)"
 BREW_BIN=""
 trap 'stop_sudo_keepalive; rm -rf "$WORK_DIR"' EXIT
@@ -110,7 +121,8 @@ require_admin() {
 
 prime_sudo() {
   if [ "${MNC_SUDOLESS:-0}" = "1" ]; then
-
+    # In sudoless mode, we only prime sudo if we're forced to (e.g. for Rosetta)
+    # The app should have already warned the user.
     return 0
   fi
   require_admin
@@ -253,7 +265,7 @@ install_tools() {
 }
 
 install_portable_tools() {
-  echo "Installing portable tools (sudoless)..."
+  echo "Step: Installing portable tools (7-Zip, Git, Wget, Zstd)..."
   mkdir -p "$PORTABLE_DIR"
   archive="$WORK_DIR/deps.zip"
   download_file "$PORTABLE_DEPS_URL" "$archive"
@@ -262,18 +274,53 @@ install_portable_tools() {
     exit 1
   }
   
-
+ 
   chmod -R u+w "$PORTABLE_DIR" 2>/dev/null || true
 
-
+ 
   for item in macncheese_deps macncheese_deps_arm64; do
     if [ -d "$PORTABLE_DIR/$item" ]; then
-      # Use force flag to overwrite existing files
+     
       cp -Rf "$PORTABLE_DIR/$item/"* "$PORTABLE_DIR/"
       rm -rf "$PORTABLE_DIR/$item"
     fi
   done
-  
+
+    
+    if [ -f "$PORTABLE_DIR/bin/7zz" ]; then
+        if file "$PORTABLE_DIR/bin/7zz" | grep -qE "HTML|text"; then
+            echo "Removing broken 7zz (HTML error page detected)..."
+            rm -f "$PORTABLE_DIR/bin/7zz"
+        fi
+    fi
+
+    if [ ! -x "$PORTABLE_DIR/bin/7zz" ] && [ ! -x "$PORTABLE_DIR/bin/7z" ]; then
+        echo "7-Zip missing or broken in deps, downloading standalone 7zz..."
+        mkdir -p "$PORTABLE_DIR/bin"
+       
+        for url in \
+          "https://www.7-zip.org/a/7z2408-mac-arm.tar.xz" \
+          "https://www.7-zip.org/a/7z2407-mac-arm.tar.xz" \
+          "https://7-zip.org/a/7z2301-mac-arm.tar.xz" \
+          "https://github.com/mont127/CheeseInstallation/releases/download/v1.0.0/7zz.tar.xz"; do
+            echo "Trying: $url"
+            if curl -L --fail --silent --connect-timeout 15 -o "$PORTABLE_DIR/bin/7zz_dl" "$url"; then
+                file_type=$(file "$PORTABLE_DIR/bin/7zz_dl")
+                echo "Downloaded file type: $file_type"
+                if echo "$file_type" | grep -q "XZ compressed data"; then
+                    tar -xJf "$PORTABLE_DIR/bin/7zz_dl" -C "$PORTABLE_DIR/bin" 7zz && rm -f "$PORTABLE_DIR/bin/7zz_dl"
+                    [ -x "$PORTABLE_DIR/bin/7zz" ] && break
+                elif echo "$file_type" | grep -Eq "Mach-O|executable"; then
+                    mv "$PORTABLE_DIR/bin/7zz_dl" "$PORTABLE_DIR/bin/7zz"
+                    break
+                fi
+            fi
+            rm -f "$PORTABLE_DIR/bin/7zz_dl"
+        done
+        chmod +x "$PORTABLE_DIR/bin/7zz" 2>/dev/null || true
+        [ -x "$PORTABLE_DIR/bin/7zz" ] && echo "Successfully installed portable 7zz"
+    fi
+
 
   echo "Applying security signatures to portable tools..."
   find "$PORTABLE_DIR" -type f -perm +111 -exec /usr/bin/codesign --force --sign - --timestamp=none {} \; 2>/dev/null || true
@@ -377,7 +424,7 @@ install_dxvk() {
   extract_dir="$WORK_DIR/dxvk-prebuilt"
 
   mkdir -p "$bin64" "$bin32"
-  echo "Downloading prebuilt DXVK..."
+  echo "Step: Downloading and installing DXVK DLLs..."
   download_file "$DXVK_PREBUILT_URL" "$archive"
   rm -rf "$extract_dir"
   mkdir -p "$extract_dir"
@@ -451,7 +498,7 @@ install_wine() {
 }
 
 install_portable_wine() {
-  echo "Installing portable wine (sudoless)..."
+  echo "Step: Installing portable Wine environment..."
   mkdir -p "$PORTABLE_DIR"
   archive="$WORK_DIR/wine.tar.xz"
   download_file "$PORTABLE_WINE_URL" "$archive"
@@ -481,9 +528,12 @@ build_dxvk32() {
 }
 
 install_mesa() {
-  ensure_brew
+  if [ "${MNC_SUDOLESS:-0}" != "1" ]; then
+    ensure_brew
+  fi
+  echo "Installing Mesa3D (extracted)..."
   
-
+  
   local sevenz="7z"
   if [ -x "$PORTABLE_DIR/bin/7zz" ]; then
     sevenz="$PORTABLE_DIR/bin/7zz"
@@ -497,6 +547,12 @@ install_mesa() {
   rm -rf mesa mesa.7z
   curl -L -o mesa.7z "$MESA_URL"
   mkdir -p mesa
+  
+  if ! command -v "$sevenz" >/dev/null 2>&1 && [ ! -x "$sevenz" ]; then
+    echo "ERROR: 7-Zip binary not found (tried 7zz, 7z). Cannot extract Mesa."
+    exit 1
+  fi
+  
   "$sevenz" x -y mesa.7z -omesa >/dev/null
   if [ ! -d "$HOME/mesa/x64" ] && ls -1 "$HOME/mesa" | grep -q mesa3d-; then
     sub=$(ls -1 "$HOME/mesa" | grep mesa3d- | head -n1)
@@ -519,7 +575,7 @@ install_dxmt() {
   rm -rf "$unpack_dir"
   mkdir -p "$unpack_dir"
 
-  echo "Downloading DXMT from $DXMT_URL"
+  echo "Step: Downloading and installing DXMT DLLs..."
   download_file "$DXMT_URL" "$archive"
   tar -xzf "$archive" -C "$unpack_dir"
 
@@ -559,31 +615,37 @@ install_dxmt() {
 }
 
 init_prefix() {
+  ensure_rosetta
   if [ -z "$PREFIX_DIR" ]; then
     echo "Missing prefix path"
     exit 1
   fi
   mkdir -p "$PREFIX_DIR"
   export WINEPREFIX="$PREFIX_DIR"
-  if [ -x "$PORTABLE_DIR/bin/wine" ]; then
-    "$PORTABLE_DIR/bin/wine" wineboot
-  elif command -v wine >/dev/null 2>&1; then
+  
+ 
+  if command -v wine >/dev/null 2>&1; then
     wine wineboot
-  elif [ -x /opt/homebrew/bin/wine ]; then
-    /opt/homebrew/bin/wine wineboot
-  elif [ -x /usr/local/bin/wine ]; then
-    /usr/local/bin/wine wineboot
-  elif [ -x "/Applications/Wine Stable.app/Contents/Resources/wine/bin/wine" ]; then
-    "/Applications/Wine Stable.app/Contents/Resources/wine/bin/wine" wineboot
-  elif [ -x "/Applications/Wine Staging.app/Contents/Resources/wine/bin/wine" ]; then
-    "/Applications/Wine Staging.app/Contents/Resources/wine/bin/wine" wineboot
   else
-    echo "wine not found"
-    exit 1
+   
+    found_wine=""
+    for app in "Wine Stable.app" "Wine Staging.app"; do
+        if [ -x "$PORTABLE_DIR/$app/Contents/Resources/wine/bin/wine" ]; then
+            found_wine="$PORTABLE_DIR/$app/Contents/Resources/wine/bin/wine"
+            break
+        fi
+    done
+    if [ -n "$found_wine" ]; then
+        "$found_wine" wineboot
+    else
+        echo "wine not found"
+        exit 1
+    fi
   fi
 }
 
 quick_setup() {
+  ensure_rosetta
   install_portable_tools
   install_portable_wine
   install_dxvk
