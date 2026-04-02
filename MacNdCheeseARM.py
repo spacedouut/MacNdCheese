@@ -18,33 +18,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional, Any
 
-try:
-    import certifi
-    _CA_FILE = certifi.where()
-except ImportError:
-    _CA_FILE = None
-
-# Bootstrapping for portable MacNCheese builds
-# If we find a local cacert.pem (bundled in Resources), prioritize it for SSL/TLS
-if getattr(sys, "frozen", False):
-    bundle_dir = Path(sys._MEIPASS)
-    # 1. Check local Resources for cacert.pem (pushed by dmgndappbuilder.sh)
-    possible_cert = bundle_dir / "cacert.pem" 
-    if not possible_cert.exists():
-        # 2. Check standard Resources relative to MacOS binary
-        exe_path = Path(sys.executable).resolve()
-        possible_cert = exe_path.parent.parent / "Resources" / "cacert.pem"
-
-    if possible_cert.exists():
-        _CA_FILE = str(possible_cert)
-        os.environ["SSL_CERT_FILE"] = _CA_FILE
-        os.environ["REQUESTS_CA_BUNDLE"] = _CA_FILE
-
-
-
-def _make_ssl_context() -> ssl.SSLContext:
-    return ssl.create_default_context(cafile=_CA_FILE)
-
 
 from PyQt6.QtGui import QAction, QPixmap, QPainter, QIcon, QColor
 from PyQt6.QtCore import QObject, QProcess, QProcessEnvironment, QThread, pyqtSignal, QPoint, QRect, QSize, Qt, QEvent, QTimer, QPropertyAnimation, QEasingCurve
@@ -218,7 +191,6 @@ class SettingsDialog(QDialog):
         self.bottle_danger_row = QWidget()
         danger_layout = QHBoxLayout(self.bottle_danger_row)
         danger_layout.setContentsMargins(0, 0, 0, 0)
-
         btn_remove = QPushButton("Remove from List")
         btn_remove.clicked.connect(self._remove_prefix)
         btn_delete = QPushButton("Delete Prefix from Disk")
@@ -333,7 +305,6 @@ class SettingsDialog(QDialog):
         self.prefix_combo.addItems(self.load_prefixes())
         self.prefix_combo.currentTextChanged.connect(self._save_current_prefixes)
 
-        self.wine_bin_edit = QLineEdit(DEFAULT_WINE_BIN)
         self.dxvk_src_edit = QLineEdit(DEFAULT_DXVK_SRC)
         self.dxvk_install_edit = QLineEdit(DEFAULT_DXVK_INSTALL)
         self.dxvk_install32_edit = QLineEdit(DEFAULT_DXVK_INSTALL32)
@@ -343,7 +314,6 @@ class SettingsDialog(QDialog):
         self.vkd3d_dir_edit = QLineEdit(DEFAULT_VKD3D_DIR)
         self.gptk_dir_edit = QLineEdit(DEFAULT_GPTK_DIR)
 
-        form.addRow("Wine binary/path", self._browsable(self.wine_bin_edit, dir=False))
         form.addRow("DXVK source", self._browsable(self.dxvk_src_edit, dir=True))
         form.addRow("DXVK install (64-bit)", self._browsable(self.dxvk_install_edit, dir=True))
         form.addRow("DXVK install (32-bit)", self._browsable(self.dxvk_install32_edit, dir=True))
@@ -469,7 +439,8 @@ class SettingsDialog(QDialog):
         self.cb_install_mesa = QCheckBox("Install Mesa")
         self.cb_build_dxvk = QCheckBox("Install DXVK (64-bit)")
         self.cb_build_dxvk32 = QCheckBox("Install DXVK (32-bit)")
-        self.cb_install_vkd3d = QCheckBox("Install VKD3D-Proton")
+        self.cb_install_gptk_full = QCheckBox("Install GPTK FULL (Experimental)")
+        self.cb_install_d3dmetal3 = QCheckBox("Install D3DMetal 3 (Prebuilt)")
         self.cb_import_gptk_dlls = QCheckBox("Import GPTK DLLs")
 
         _indicator = (
@@ -484,7 +455,8 @@ class SettingsDialog(QDialog):
             (self.cb_install_mesa,      None,      False),
             (self.cb_build_dxvk,        None,      False),
             (self.cb_build_dxvk32,      None,      False),
-            (self.cb_install_vkd3d,     None,      False),
+            (self.cb_install_gptk_full, "#FFCC00", True),
+            (self.cb_install_d3dmetal3, "#00D8D6", True),
             (self.cb_import_gptk_dlls,  "#7DD3FC", True),
         ):
             color_css = f" color: {color};" if color else ""
@@ -506,7 +478,8 @@ class SettingsDialog(QDialog):
             (self.cb_install_mesa,      "install_mesa",                None),
             (self.cb_build_dxvk,        "build_dxvk",                  None),
             (self.cb_build_dxvk32,      "build_dxvk32",                None),
-            (self.cb_install_vkd3d,     "install_vkd3d",               None),
+            (self.cb_install_gptk_full, "install_gptk_full",           None),
+            (self.cb_install_d3dmetal3, "install_d3dmetal3",           None),
             (self.cb_import_gptk_dlls,  "choose_and_import_gptk_dlls", None),
         ]
 
@@ -558,9 +531,17 @@ class SettingsDialog(QDialog):
             p = _path("dxvk_install32_edit")
             return bool(p and all((p / "bin" / dll).exists() for dll in DXVK_DLLS))
 
-        def _is_vkd3d():
-            p = _path("vkd3d_dir_edit")
-            return bool(p and (p / "d3d12.dll").exists())
+        def _is_gptk_full():
+            return (
+                Path("/usr/local/bin/gameportingtoolkit").exists()
+                or bool(shutil.which("gameportingtoolkit"))
+            )
+
+        def _is_d3dmetal3():
+            return (
+                Path.home() / "gptk3" / "Game Porting Toolkit.app"
+                / "Contents" / "Resources" / "wine" / "bin" / "wine64"
+            ).exists()
 
         def _is_gptk_dlls():
             p = _path("gptk_dir_edit")
@@ -571,8 +552,8 @@ class SettingsDialog(QDialog):
 
         states = [
             _is_tools(), _is_wine(), _is_mesa(),
-            _is_dxvk(), _is_dxvk32(), _is_vkd3d(),
-            _is_gptk_dlls(),
+            _is_dxvk(), _is_dxvk32(),
+            _is_gptk_full(), _is_d3dmetal3(), _is_gptk_dlls(),
         ]
         for (cb, _, _), checked in zip(self._component_actions, states):
             cb.setChecked(checked)
@@ -603,7 +584,11 @@ class SettingsDialog(QDialog):
         
         info = QPlainTextEdit()
         info.setReadOnly(True)
-        info.setPlainText("Developer information is not available.")
+        try:
+            dev_text = Path("/tmp/dev_ui_text.txt").read_text()
+            info.setPlainText(dev_text)
+        except Exception:
+            info.setPlainText("Manual installation guide could not be loaded.")
         
         layout.addWidget(info)
         return widget
@@ -645,8 +630,6 @@ class SettingsDialog(QDialog):
             return
         if hasattr(parent, "prefix_combo"):
             self.prefix_combo.setCurrentText(parent.prefix_combo.currentText())
-        if hasattr(parent, "wine_bin_edit"):
-            self.wine_bin_edit.setText(parent.wine_bin_edit.text())
         if hasattr(parent, "dxvk_src_edit"):
             self.dxvk_src_edit.setText(parent.dxvk_src_edit.text())
         if hasattr(parent, "dxvk_install_edit"):
@@ -678,8 +661,6 @@ class SettingsDialog(QDialog):
             parent.prefix_combo.setCurrentText(current)
             if current not in [parent.prefix_combo.itemText(i) for i in range(parent.prefix_combo.count())]:
                 parent.prefix_combo.insertItem(0, current)
-        if hasattr(parent, "wine_bin_edit"):
-            parent.wine_bin_edit.setText(self.wine_bin_edit.text())
         if hasattr(parent, "dxvk_src_edit"):
             parent.dxvk_src_edit.setText(self.dxvk_src_edit.text())
         if hasattr(parent, "dxvk_install_edit"):
@@ -1159,75 +1140,25 @@ QGroupBox::title {
 }
 """
 
-
-class WineSetupDialog(QDialog):
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("MacNCheese - Wine Required")
-        self.setFixedWidth(500)
-        self._build_ui()
-
-    def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setSpacing(20)
-        layout.setContentsMargins(30, 30, 30, 30)
-
-        title = QLabel("Wine Installation Required")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #FFFFFF;")
-        layout.addWidget(title)
-
-        msg = QLabel("A Wine installation is required to launch games. You can extracts a pre-built portable archive (.tar.xz) or point to an existing Wine binary on your system.")
-        msg.setWordWrap(True)
-        msg.setStyleSheet("color: rgba(255, 255, 255, 0.8);")
-        layout.addWidget(msg)
-
-        btn_archive = QPushButton("Install from Portable Archive (.tar.xz)")
-        btn_archive.setFixedHeight(40)
-        btn_archive.clicked.connect(self.accept_archive)
-        layout.addWidget(btn_archive)
-
-        btn_pick = QPushButton("Select Existing Binary (wine / wine64)")
-        btn_pick.setFixedHeight(40)
-        btn_pick.clicked.connect(self.accept_pick)
-        layout.addWidget(btn_pick)
-
-        hint = QLabel("Note: If you just built Wine 11.3, select 'Install from Portable Archive' and pick the .tar.xz file you created.")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: rgba(255,255,255,0.4); font-size: 11px; font-style: italic;")
-        layout.addWidget(hint)
-
-        btn_close = QPushButton("Set Up Later")
-        btn_close.setFlat(True)
-        btn_close.clicked.connect(self.reject)
-        layout.addWidget(btn_close)
-
-    def accept_archive(self) -> None:
-        self.done(10) # Custom code for archive
-
-    def accept_pick(self) -> None:
-        self.done(20) # Custom code for pick
-
 APP_NAME = "MacNCheese"
-
-APP_VERSION = "v5.4.2"
+APP_VERSION = "v5.5.0"
 GITHUB_REPO = "mont127/MacNdCheese"
 GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
-DATA_ROOT = Path.home() / "Library" / "Application Support" / "MacNCheese"
-DEFAULT_PREFIX = str(DATA_ROOT / "bottles" / "wined")
-DEFAULT_WINE_BIN = ""
-DEFAULT_DXVK_SRC = str(DATA_ROOT / "src" / "DXVK-macOS")
-DEFAULT_DXVK_INSTALL = str(DATA_ROOT / "runtime" / "dxvk")
-DEFAULT_DXVK_INSTALL32 = str(DATA_ROOT / "runtime" / "dxvk-32")
-DEFAULT_STEAM_SETUP = str(DATA_ROOT / "setup" / "SteamSetup.exe")
-DEFAULT_MESA_DIR = str(DATA_ROOT / "runtime" / "mesa")
-DEFAULT_DXMT_DIR = str(DATA_ROOT / "runtime" / "dxmt")
-DEFAULT_VKD3D_DIR = str(DATA_ROOT / "runtime" / "vkd3d")
-DEFAULT_GPTK_DIR = str(DATA_ROOT / "runtime" / "gptk")
+DEFAULT_PREFIX = str(Path.home() / "wined")
+PORTABLE_DIR = Path.home() / "Library/Application Support/MacNCheese/deps"
+DEFAULT_DXVK_SRC = str(Path.home() / "DXVK-macOS")
+DEFAULT_DXVK_INSTALL = str(Path.home() / "dxvk-release")
+DEFAULT_DXVK_INSTALL32 = str(Path.home() / "dxvk-release-32")
+DEFAULT_STEAM_SETUP = str(Path.home() / "Downloads" / "SteamSetup.exe")
+DEFAULT_MESA_DIR = str(Path.home() / "mesa" / "x64")
+DEFAULT_DXMT_DIR = str(Path.home() / "dxmt")
+DEFAULT_VKD3D_DIR = str(Path.home() / "vkd3d-proton")
+DEFAULT_GPTK_DIR = str(Path(__file__).resolve().with_name("gptk"))
 DEFAULT_PATCHED_WINE_APP_RESOURCES_SUBDIR = "wine-build"
 STEAM_URL = "https://steamcdn-a.akamaihd.net/client/installer/SteamSetup.exe"
-DXVK_DLLS = ("d3d11.dll", "dxgi.dll", "d3d10.dll")
-DXVK_OPTIONAL_DLLS = ()
+DXVK_DLLS = ("d3d11.dll", "d3d10core.dll")
+DXVK_OPTIONAL_DLLS = ("dxgi.dll",)
 GPTK_REQUIRED_DLLS = ("dxgi.dll", "d3d11.dll", "d3d12.dll")
 GPTK_OPTIONAL_DLLS = ("d3d12core.dll", "d3d10core.dll")
 
@@ -1243,7 +1174,8 @@ LAUNCH_BACKEND_MESA_ZINK = "mesa:zink"
 LAUNCH_BACKEND_MESA_SWR = "mesa:swr"
 LAUNCH_BACKEND_VKD3D = "vkd3d-proton"
 LAUNCH_BACKEND_GPTK = "gptk"
-
+LAUNCH_BACKEND_GPTK_FULL = "gptk_full"
+LAUNCH_BACKEND_D3DMETAL3 = "d3dmetal3"
 
 MESA_DRIVER_LLVMPIPE = "llvmpipe"
 MESA_DRIVER_ZINK = "zink"
@@ -1259,6 +1191,8 @@ LAUNCH_BACKENDS = (
     ("Mesa zink (GPU, Vulkan)", LAUNCH_BACKEND_MESA_ZINK),
     ("Mesa swr (CPU rasterizer)", LAUNCH_BACKEND_MESA_SWR),
     ("GPTK (D3DMetal)", LAUNCH_BACKEND_GPTK),
+    ("GPTK Full (Apple Toolkit)", LAUNCH_BACKEND_GPTK_FULL),
+    ("D3DMetal 3 (Prebuilt GPTK)", LAUNCH_BACKEND_D3DMETAL3),
 )
 
 
@@ -1492,7 +1426,7 @@ class MesaBackend(Backend):
     driver = MESA_DRIVER_LLVMPIPE
 
     def is_available(self, prefix: PrefixModel, game: GameModel, window: "MainWindow") -> bool:
-        return any((window.mesa_dir / p / "opengl32.dll").exists() for p in ("", "x64", "x86"))
+        return (window.mesa_dir / "opengl32.dll").exists()
 
     def prepare_game(self, prefix: PrefixModel, game: GameModel, window: "MainWindow") -> dict[str, Any]:
         current = window.selected_game()
@@ -1651,7 +1585,86 @@ class GptkBackend(Backend):
         env.pop("MESA_GLTHREAD", None)
         return env
 
+class GptkFullBackend(Backend):
+    backend_id = LAUNCH_BACKEND_GPTK_FULL
+    label = "GPTK Full (Apple Toolkit)"
 
+    def is_available(self, prefix: PrefixModel, game: GameModel, window: "MainWindow") -> bool:
+        return Path("/usr/local/bin/gameportingtoolkit").exists() or shutil.which("gameportingtoolkit") is not None
+
+    def prepare_game(self, prefix: PrefixModel, game: GameModel, window: "MainWindow") -> dict[str, Any]:
+        if not self.is_available(prefix, game, window):
+            raise RuntimeError("GPTK (gameportingtoolkit) not found. Install GPTK Full from Settings -> Setup first.")
+        window.unpatch_selected_game()
+        return {"kind": "gptk_full"}
+
+    def apply_env(self, env: dict[str, str], game: GameModel, prefix: PrefixModel, window: "MainWindow") -> dict[str, str]:
+        env = super().apply_env(env, game, prefix, window)
+        env["WINEPREFIX"] = str(prefix.path)
+        env["WINESERVER"] = window.wineserver_binary()
+        return env
+
+    def launch_command(self, game: GameModel, prefix: PrefixModel) -> list[str]:
+        gptk_bin = "/usr/local/bin/gameportingtoolkit"
+        if not Path(gptk_bin).exists():
+            raise FileNotFoundError("gameportingtoolkit not found in /usr/local/bin. Install GPTK Full first.")
+        if game.exe_path is None:
+            raise ValueError("Executable path is required for GPTK Full backend.")
+        cmd = ["arch", "-x86_64", gptk_bin, str(prefix.path), str(game.exe_path)]
+        
+        
+        
+        return cmd
+
+class D3DMetal3Backend(Backend):
+    backend_id = LAUNCH_BACKEND_D3DMETAL3
+    label = "D3DMetal 3 (Prebuilt GPTK)"
+
+    def is_available(self, prefix: PrefixModel, game: GameModel, window: "MainWindow") -> bool:
+        gptk3_root = Path.home() / "gptk3" / "Game Porting Toolkit.app"
+        wine64 = gptk3_root / "Contents" / "Resources" / "wine" / "bin" / "wine64"
+        return wine64.exists()
+
+    def prepare_game(self, prefix: PrefixModel, game: GameModel, window: "MainWindow") -> dict[str, Any]:
+        if not self.is_available(prefix, game, window):
+            raise RuntimeError("D3DMetal 3 (Prebuilt GPTK) not found. Install it first.")
+        window.unpatch_selected_game()
+        return {"kind": "d3dmetal3"}
+
+    def apply_env(self, env: dict[str, str], game: GameModel, prefix: PrefixModel, window: "MainWindow") -> dict[str, str]:
+        env = super().apply_env(env, game, prefix, window)
+        env["WINEPREFIX"] = str(prefix.path)
+        env["WINESERVER"] = window.wineserver_binary()
+
+        gptk3_root = Path.home() / "gptk3" / "Game Porting Toolkit.app"
+        wine_res = gptk3_root / "Contents" / "Resources" / "wine"
+        lib_dir = wine_res / "lib"
+        unix_lib_dir = lib_dir / "wine" / "x86_64-unix"
+        external_lib_dir = lib_dir / "external"
+        dyld_paths = [str(unix_lib_dir), str(lib_dir), str(external_lib_dir)]
+        env["DYLD_LIBRARY_PATH"] = ":".join(dyld_paths)
+        env["WINEPATH"] = str(wine_res / "bin")
+        env["DYLD_SHARED_REGION"] = "avoid"
+        overrides = env.get("WINEDLLOVERRIDES", "")
+        m3_ovr = "d3d11,d3d12,dxgi=n"
+        if overrides:
+            overrides += f";{m3_ovr}"
+        else:
+            overrides = m3_ovr
+        env["WINEDLLOVERRIDES"] = overrides
+        env["WINEDEBUG"] = "-all"
+        env["WINEESYNC"] = "1"
+        return env
+
+    def launch_command(self, game: GameModel, prefix: PrefixModel) -> list[str]:
+        gptk3_root = Path.home() / "gptk3" / "Game Porting Toolkit.app"
+        wine64 = gptk3_root / "Contents" / "Resources" / "wine" / "bin" / "wine64"
+        if not wine64.exists():
+            raise FileNotFoundError(f"D3DMetal 3 wine64 not found at {wine64}. Install D3DMetal 3 (Prebuilt) first.")
+        if game.exe_path is None:
+            raise ValueError("Executable path is required for D3DMetal 3 backend.")
+
+        return ["arch", "-x86_64", str(wine64), str(game.exe_path)]
 
 
 class AutoBackend(Backend):
@@ -1960,7 +1973,7 @@ class CommandWorker(QObject):
                 if self._cancelled:
                     self.finished.emit(False, 'Cancelled')
                     return
-                self.output.emit(f"$ {shlex.join(cmd)}")
+                self.output.emit(f"$ {' '.join(cmd)}")
                 self._proc = subprocess.Popen(
                     cmd, 
                     cwd=self.cwd, 
@@ -1979,7 +1992,7 @@ class CommandWorker(QObject):
                     self.finished.emit(False, 'Cancelled')
                     return
                 if rc != 0:
-                    self.finished.emit(False, f"Command failed with exit code {rc}: {shlex.join(cmd)}")
+                    self.finished.emit(False, f"Command failed with exit code {rc}: {' '.join(cmd)}")
                     return
             self.finished.emit(True, 'Done')
         except Exception as exc:
@@ -2038,7 +2051,9 @@ class CoverFetcher(QThread):
 
         cdn_url = f"https://cdn.akamai.steamstatic.com/steam/apps/{self.appid}/library_600x900.jpg"
         try:
-            ctx = _make_ssl_context()
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
             req = urllib.request.Request(cdn_url, headers={"User-Agent": "MacNCheese"})
             with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
                 data = resp.read()
@@ -2643,8 +2658,8 @@ class UpdateChecker(QThread):
 
     def run(self):
         try:
-            ctx = _make_ssl_context()
-
+            ctx = ssl._create_unverified_context()
+            
             req = urllib.request.Request(GITHUB_LATEST_RELEASE_API, headers={'User-Agent': f'{APP_NAME}-Updater'})
             with urllib.request.urlopen(req, timeout=5, context=ctx) as response:
                 if response.status == 200:
@@ -2685,7 +2700,6 @@ class MainWindow(QMainWindow):
 
         self.prefix_combo = self.settings.prefix_combo
         self.prefix_combo.currentTextChanged.connect(self._on_prefix_changed)
-        self.wine_bin_edit = self.settings.wine_bin_edit
         self.dxvk_src_edit = self.settings.dxvk_src_edit
         self.dxvk_install_edit = self.settings.dxvk_install_edit
         self.dxvk_install32_edit = self.settings.dxvk_install32_edit
@@ -2711,81 +2725,9 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self.load_user_settings()
         self.startup_update_check()
-        self.check_7z_dependency()
         self.log(f"{APP_NAME} ready")
         self._sync_sidebar_prefix_buttons()
         QTimer.singleShot(500, self._ensure_default_prefix)
-        QTimer.singleShot(1500, self.check_wine_at_startup)
-
-    def check_wine_at_startup(self) -> None:
-        if not self.has_wine():
-            self.log("Wine not found at startup. Prompting for setup.")
-            self.install_wine()
-
-    def install_wine(self) -> None:
-        dlg = WineSetupDialog(self)
-        res = dlg.exec()
-        if res == 10:
-            self.prompt_install_wine_archive()
-        elif res == 20:
-            self.prompt_pick_wine_binary()
-
-    def prompt_install_wine_archive(self) -> None:
-        archive_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Wine Portable Archive", str(Path.home()), "Archives (*.tar.xz *.tar.gz *.tar)"
-        )
-        if not archive_path:
-            return
-        
-        # Default destination for manual wine
-        dest_dir = DATA_ROOT / "runtime" / "wine-11.3"
-        if dest_dir.exists():
-             reply = QMessageBox.question(self, "Overwrite", f"Directory {dest_dir} already exists. Overwrite?",
-                                          QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-             if reply == QMessageBox.StandardButton.No:
-                 return
-        
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        
-        from PyQt6.QtWidgets import QProgressDialog
-        progress = QProgressDialog("Extracting Wine...", "Cancel", 0, 0, self)
-        progress.setWindowTitle("MacNCheese Installer")
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.show()
-        QApplication.processEvents()
-
-        try:
-            # Run tar via subprocess
-            cmd = ["tar", "-xJf", str(archive_path), "-C", str(dest_dir)]
-            subprocess.check_call(cmd)
-            
-            # Find the binary
-            wine_bin = dest_dir / "bin" / "wine64"
-            if not wine_bin.exists():
-                wine_bin = dest_dir / "bin" / "wine"
-            
-            if wine_bin.exists():
-                self.wine_bin_edit.setText(str(wine_bin))
-                self.save_user_settings()
-                QMessageBox.information(self, "Success", f"Wine installed successfully to:\n{dest_dir}")
-                self.log(f"Manual wine installed: {wine_bin}")
-            else:
-                QMessageBox.critical(self, "Error", f"Could not find bin/wine or bin/wine64 in extracted archive at {dest_dir}")
-        except Exception as e:
-            QMessageBox.critical(self, "Extraction Failed", f"Failed to extract Wine archive:\n{e}")
-        finally:
-            progress.close()
-
-    def prompt_pick_wine_binary(self) -> None:
-        binary_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Wine Binary", "/usr/local/bin", "Executables (*)"
-        )
-        if binary_path:
-            self.wine_bin_edit.setText(binary_path)
-            self.save_user_settings()
-            QMessageBox.information(self, "Success", f"Wine path set to: {binary_path}")
-            self.log(f"Manual wine path set: {binary_path}")
-
 
     def load_user_settings(self) -> None:
         self.user_settings_path = Path.home() / ".macncheese_settings.json"
@@ -2799,40 +2741,36 @@ class MainWindow(QMainWindow):
                     items = [self.prefix_combo.itemText(i) for i in range(self.prefix_combo.count())]
                     if last_prefix in items:
                         self.prefix_combo.setCurrentText(last_prefix)
-                
-                # Load paths
-                if "wine_bin" in data: self.wine_bin_edit.setText(data["wine_bin"])
-                if "dxvk_src" in data: self.dxvk_src_edit.setText(data["dxvk_src"])
-                if "dxvk_install" in data: self.dxvk_install_edit.setText(data["dxvk_install"])
-                if "dxvk_install32" in data: self.dxvk_install32_edit.setText(data["dxvk_install32"])
-                if "steam_setup" in data: self.steam_setup_edit.setText(data["steam_setup"])
-                if "mesa_dir" in data: self.mesa_dir_edit.setText(data["mesa_dir"])
-                if "dxmt_dir" in data: self.dxmt_dir_edit.setText(data["dxmt_dir"])
-                if "vkd3d_dir" in data: self.vkd3d_dir_edit.setText(data["vkd3d_dir"])
-                if "gptk_dir" in data: self.gptk_dir_edit.setText(data["gptk_dir"])
             except Exception:
                 pass
+
+    def get_qprocess_env(self) -> QProcessEnvironment:
+        qenv = QProcessEnvironment.systemEnvironment()
+        path = qenv.value("PATH")
+        portable_bin = str(PORTABLE_DIR / "bin")
+        if portable_bin not in path:
+            qenv.insert("PATH", f"{portable_bin}:{path}")
+        return qenv
+
+    def get_app_env_dict(self) -> dict[str, str]:
+        env = os.environ.copy()
+        path = env.get("PATH", "")
+        portable_bin = str(PORTABLE_DIR / "bin")
+        if portable_bin not in path:
+            env["PATH"] = f"{portable_bin}:{path}"
+        return env
 
     def save_user_settings(self) -> None:
         try:
             data = {
                 "skip_update_check": self.skip_update_check,
                 "active_prefix": self.prefix_combo.currentText(),
-                "wine_bin": self.wine_bin_edit.text(),
-                "dxvk_src": self.dxvk_src_edit.text(),
-                "dxvk_install": self.dxvk_install_edit.text(),
-                "dxvk_install32": self.dxvk_install32_edit.text(),
-                "steam_setup": self.steam_setup_edit.text(),
-                "mesa_dir": self.mesa_dir_edit.text(),
-                "dxmt_dir": self.dxmt_dir_edit.text(),
-                "vkd3d_dir": self.vkd3d_dir_edit.text(),
-                "gptk_dir": self.gptk_dir_edit.text(),
             }
-            self.user_settings_path.write_text(json.dumps(data, indent=2))
+            self.user_settings_path.write_text(json.dumps(data))
         except Exception:
             pass
 
-    # ── Per-bottle config ─────────────────────────────────────────────────────
+   
 
     @property
     def _bottles_config_path(self) -> Path:
@@ -2906,88 +2844,7 @@ class MainWindow(QMainWindow):
         config[key] = existing
         self._save_bottles_config(config)
 
-   
-    def check_7z_dependency(self):
-        
-        bin_dir = DATA_ROOT / "bin"
-        
-        has_7z = shutil.which("7z") or shutil.which("7zz") or (bin_dir / "7z").exists() or (bin_dir / "7zz").exists()
-        
-        if not has_7z:
-            url = "https://www.7-zip.org/a/7z2408-mac.tar.xz"
-            webbrowser.open(url)
-            
-            box = QMessageBox(self)
-            box.setWindowTitle("7-Zip Installation")
-            box.setIcon(QMessageBox.Icon.Information)
-            box.setText("<b>7-Zip is required</b> to handle component extractions.")
-            box.setInformativeText(
-                "I've opened the 7-Zip download in your browser.\n\n"
-                "Once the download is complete, I will automatically detect it in your Downloads folder and finish the setup."
-            )
-            box.setStandardButtons(QMessageBox.StandardButton.Ok)
-            box.exec()
-            
-            
-            if not hasattr(self, "_sevenzip_timer"):
-                self._sevenzip_timer = QTimer(self)
-                self._sevenzip_timer.timeout.connect(self._poll_for_7z_download)
-                self._sevenzip_timer.start(2000) 
-                self.log("Waiting for 7-Zip download in ~/Downloads...")
-
-    def _poll_for_7z_download(self):
-        downloads_dir = Path.home() / "Downloads"
-        if not downloads_dir.exists():
-            return
-            
-       
-        filenames = ["7z2408-mac.tar.xz"]
-        for i in range(1, 11):
-            filenames.append(f"7z2408-mac ({i}).tar.xz")
-            
-        for name in filenames:
-            p = downloads_dir / name
-            if p.exists() and p.stat().st_size > 10000: 
-                self.log(f"Detected 7-Zip download: {name}")
-                self._sevenzip_timer.stop()
-                self._complete_7z_install(p)
-                return
-
-    def _complete_7z_install(self, source_path):
-        try:
-            bin_dir = DATA_ROOT / "bin"
-            bin_dir.mkdir(parents=True, exist_ok=True)
-            
-            self.log(f"Extracting 7zz from {source_path.name}...")
-           
-            subprocess.run(["tar", "-xJf", str(source_path), "-C", str(bin_dir), "7zz"], check=True)
-            
-            seven_z = bin_dir / "7zz"
-            if seven_z.exists():
-                os.chmod(seven_z, 0o755)
-               
-                subprocess.run(["xattr", "-d", "com.apple.quarantine", str(seven_z)], capture_output=True)
-                
-                
-                z_link = bin_dir / "7z"
-                if z_link.exists() or z_link.is_symlink():
-                    z_link.unlink()
-                try:
-                    os.symlink("7zz", z_link)
-                except Exception:
-                    
-                    shutil.copy2(seven_z, z_link)
-                
-                QMessageBox.information(self, "Success", "7-Zip has been installed and configured successfully.")
-                self.log("7-Zip installation complete.")
-            else:
-                raise RuntimeError("Failed to extract 7zz binary.")
-                
-        except Exception as e:
-            self.log(f"Error installing 7-Zip: {e}")
-            QMessageBox.critical(self, "Installation Error", f"Failed to complete 7-Zip setup:\n{e}")
-            
-            self._sevenzip_timer.start(2000)
+    # ─────────────────────────────────────────────────────────────────────────
 
     def startup_update_check(self):
         if not self.skip_update_check:
@@ -3154,6 +3011,8 @@ class MainWindow(QMainWindow):
             Vkd3dProtonBackend(),
             DxmtBackend(),
             GptkBackend(),
+            GptkFullBackend(),
+            D3DMetal3Backend(),
         ):
             self.backend_registry.register(backend)
         self.backend_registry.register(AutoBackend(self.backend_registry))
@@ -3173,18 +3032,20 @@ class MainWindow(QMainWindow):
         exe_name = game.exe_path.name.lower() if game.exe_path else ""
 
         
+        gptk3 = self.backend_registry.get(LAUNCH_BACKEND_D3DMETAL3)
         prefix = self.current_prefix_model()
+        has_gptk3 = bool(gptk3 and gptk3.is_available(prefix, game, self))
 
         if "poppy playtime" in token or "poppy_playtime" in exe_name or "project playtime" in token or "project_playtime" in exe_name:
-            return LAUNCH_BACKEND_DXVK
+            return LAUNCH_BACKEND_D3DMETAL3 if has_gptk3 else LAUNCH_BACKEND_DXVK
         if "mewgenics" in token:
             return LAUNCH_BACKEND_MESA_LLVMPIPE
         if "enlisted" in token or exe_name == "enlisted.exe" or exe_name == "enlisted-min-cpu.exe":
-            return LAUNCH_BACKEND_VKD3D
+            return LAUNCH_BACKEND_VKD3D if not has_gptk3 else LAUNCH_BACKEND_D3DMETAL3
         if (game.install_path / "D3D12").exists():
-            return LAUNCH_BACKEND_VKD3D
-
-        return LAUNCH_BACKEND_DXVK
+            return LAUNCH_BACKEND_D3DMETAL3 if has_gptk3 else LAUNCH_BACKEND_VKD3D
+            
+        return LAUNCH_BACKEND_D3DMETAL3 if has_gptk3 else LAUNCH_BACKEND_DXVK
 
     def available_backends(self) -> list[tuple[str, str]]:
         """Return (label, backend_id) for Auto plus every installed backend."""
@@ -3201,10 +3062,8 @@ class MainWindow(QMainWindow):
                 try:
                     if backend.is_available(prefix, dummy, self):
                         result.append((label, backend_id))
-                    else:
-                        result.append((f"{label} (Not Installed)", backend_id))
                 except Exception:
-                    result.append((f"{label} (Not Installed)", backend_id))
+                    pass
         return result
 
     def resolve_backend(self, backend_id: str, game: GameModel, prefix: PrefixModel) -> Backend:
@@ -4350,6 +4209,11 @@ class MainWindow(QMainWindow):
         env = os.environ.copy()
         env["WINEDEBUG"] = "-all"
         env["WINEPREFIX"] = str(self.prefix_path)
+        
+        path = env.get("PATH", "")
+        portable_bin = str(PORTABLE_DIR / "bin")
+        if portable_bin not in path:
+            env["PATH"] = f"{portable_bin}:{path}"
 
         if not env.get("VK_ICD_FILENAMES"):
             env["VK_ICD_FILENAMES"] = self._ensure_moltenvk_icd()
@@ -4398,24 +4262,9 @@ class MainWindow(QMainWindow):
         if patched:
             return patched
 
-        # 1. Custom override from settings
-        custom = self.wine_bin_edit.text().strip()
-        if custom:
-            cp = Path(custom).expanduser()
-            if cp.exists():
-                if cp.is_dir():
-                    # Try common locations within a Wine distribution directory
-                    for sub in ("bin/wine64", "bin/wine", "wine64", "wine"):
-                        cand = cp / sub
-                        if cand.exists() and cand.is_file():
-                            return str(cand)
-                elif cp.is_file():
-                    return str(cp)
-
-        # 2. Portable and system defaults
-        portable_wine = DATA_ROOT / "runtime" / "wine" / "bin" / "wine"
         for candidate in (
-            str(portable_wine),
+            str(PORTABLE_DIR / "bin" / "wine64"),
+            str(PORTABLE_DIR / "bin" / "wine"),
             shutil.which("wine64"),
             shutil.which("wine"),
             "/usr/local/bin/wine64",
@@ -4426,9 +4275,8 @@ class MainWindow(QMainWindow):
             if candidate and Path(candidate).exists():
                 return candidate
         raise FileNotFoundError(
-            f"Wine not found. MacNCheese setup expected it at {portable_wine} or in your system path."
+            "Wine not found. Install Wine or bundle a patched Wine build in Resources/wine-build."
         )
-
 
 
 
@@ -4438,20 +4286,8 @@ class MainWindow(QMainWindow):
         if patched:
             return patched
 
-        # 1. Look relative to the active wine_binary
-        try:
-            wb = Path(self.wine_binary())
-            # Check same dir as wine, or a sibling bin dir if we found it in a weird way
-            for cand_path in (wb.parent / "wineserver", wb.parent.parent / "bin" / "wineserver"):
-                if cand_path.exists() and cand_path.is_file():
-                    return str(cand_path)
-        except Exception:
-            pass
-
-        # 2. Portable and system defaults
-        portable_ws = DATA_ROOT / "runtime" / "wine" / "bin" / "wineserver"
         for candidate in (
-            str(portable_ws),
+            str(PORTABLE_DIR / "bin" / "wineserver"),
             shutil.which("wineserver"),
             "/usr/local/bin/wineserver",
             "/opt/homebrew/bin/wineserver",
@@ -4459,9 +4295,8 @@ class MainWindow(QMainWindow):
             if candidate and Path(candidate).exists():
                 return candidate
         raise FileNotFoundError(
-            f"wineserver not found. Expected at {portable_ws} or in your system path."
+            "wineserver not found. Install Wine or bundle a patched Wine build in Resources/wine-build."
         )
-
 
     def run_commands(
         self,
@@ -4488,7 +4323,10 @@ class MainWindow(QMainWindow):
         self._progress_dlg.cancel_requested.connect(self._cancel_worker)
 
         self.worker_thread = QThread(self)
-        self.worker = CommandWorker(commands, env=env, cwd=cwd)
+        full_env = self.get_app_env_dict()
+        if env:
+            full_env.update(env)
+        self.worker = CommandWorker(commands, env=full_env, cwd=cwd)
         self.worker.moveToThread(self.worker_thread)
 
         self.worker_thread.started.connect(self.worker.run)
@@ -4516,9 +4354,6 @@ class MainWindow(QMainWindow):
 
     def on_worker_finished(self, ok: bool, message: str) -> None:
         completed_action = self.interactive_install_action
-        post_action = getattr(self, "pending_post_install_action", None)
-        self.pending_post_install_action = None
-
         self.set_status(message if ok else f"Failed: {message}")
         self.interactive_install_in_progress = False
         if self._progress_dlg is not None:
@@ -4535,6 +4370,7 @@ class MainWindow(QMainWindow):
         if not self.missing_core_tools():
             self.interactive_install_in_progress = False
             self.interactive_install_action = None
+            self.pending_post_install_action = None
         if not ok:
             lower = message.lower()
             if lower == "cancelled":
@@ -4547,11 +4383,24 @@ class MainWindow(QMainWindow):
                 )
                 self.set_status("Xcode Command Line Tools required")
                 return
-            
-            QMessageBox.warning(self, APP_NAME, f"Setup failed: {message}\n\nPlease check your internet connection and ensure ~/Library/Application Support is accessible.")
-            self.set_status(f"Installation failed: {message}")
+            if "need sudo access on macos" in lower:
+                QMessageBox.warning(
+                    self,
+                    APP_NAME,
+                    "MacNCheese needs an Administrator macOS account for setup. Open Terminal and run 'sudo -v'. If that fails, switch to an admin account and try again.",
+                )
+                self.set_status("Administrator account required")
+                return
+            if "password was rejected" in lower:
+                QMessageBox.warning(
+                    self,
+                    APP_NAME,
+                    "The macOS password was rejected. Enter the same password you use to sign in to macOS, then try setup again.",
+                )
+                self.set_status("Incorrect macOS password")
+                return
+            QMessageBox.warning(self, APP_NAME, message)
             return
-
 
         from PyQt6.QtCore import QTimer
 
@@ -4579,12 +4428,6 @@ class MainWindow(QMainWindow):
             self.log("SteamSetup downloaded. Opening interactively...")
             self._open_steamsetup_pending = False
             QTimer.singleShot(300, self.open_steamsetup)
-
-        # Handle pending post-install actions (e.g. init_prefix after quick_setup)
-        if ok and post_action:
-            self.log(f"Action '{completed_action}' finished. Running post-action: {post_action}...")
-            # Use a slightly longer delay to ensure UI transitions smoothly
-            QTimer.singleShot(1500, lambda: self.run_installer_action(post_action))
 
         # Handle pending bottle exe after tool install
         pending_exe = getattr(self, "_pending_bottle_exe", None)
@@ -4624,9 +4467,13 @@ class MainWindow(QMainWindow):
             return self.wine_binary()
         except Exception as exc:
             msg = str(exc)
-            
+           
             if "wine not found" in msg.lower() or "no such file" in msg.lower():
-                # self.install_wine() shows the manual setup dialog
+                QMessageBox.information(
+                    self,
+                    APP_NAME,
+                    "Wine not found. MacNCheese will now open the installer to set up the environment.",
+                )
                 self.install_wine()
                 return None
             QMessageBox.warning(self, APP_NAME, msg)
@@ -4637,17 +4484,10 @@ class MainWindow(QMainWindow):
         missing: list[str] = []
         if not self.has_wine():
             missing.append("Wine")
-        
-        # Check for DXVK DLL (could be in bin/, x64/, or root)
-        dxvk_found = any((self.dxvk_install / p / "d3d11.dll").exists() for p in ("", "bin", "x64"))
-        if not dxvk_found:
+        if not (self.dxvk_install / "bin" / "d3d11.dll").exists():
             missing.append("DXVK")
-            
-        # Check for Mesa DLL (could be in x64/ or root)
-        mesa_found = any((self.mesa_dir / p / "opengl32.dll").exists() for p in ("", "x64", "x86"))
-        if not mesa_found:
+        if not (self.mesa_dir / "opengl32.dll").exists():
             missing.append("Mesa")
-            
         return missing
 
     def installer_script_path(self) -> Path:
@@ -4686,25 +4526,9 @@ class MainWindow(QMainWindow):
             f"exit_status=$?; "
             f"echo; "
             f"echo 'Installer finished with exit code:' $exit_status; "
-            f"if [ $exit_status -ne 0 ]; then echo 'FAILURE: Problem occurred during installation.'; fi; "
-            f"echo 'You can close this window now or run more commands.'; "
+            f"echo 'You can run extra commands in this terminal if needed.'; "
             f"exec bash"
         )
-
-    def run_action_in_terminal(self, action: str) -> None:
-        cmd = self.installer_terminal_command(action)
-        # Use osascript to launch Terminal.app and run the command
-        # We need to escape double quotes and backslashes for AppleScript
-        escaped_cmd = cmd.replace("\\", "\\\\").replace('"', '\\"')
-        applescript = f'tell application "Terminal" to do script "{escaped_cmd}" activate'
-        
-        try:
-            subprocess.run(["osascript", "-e", applescript], check=True)
-            self.log(f"Launched native Terminal for action: {action}")
-        except Exception as e:
-            self.log(f"Failed to launch Terminal via osascript: {e}")
-            # Fallback to in-app run if osascript fails
-            self.run_installer_action(action)
 
 
 
@@ -4727,9 +4551,30 @@ class MainWindow(QMainWindow):
             return True, out
         return False, "Xcode Command Line Tools are required before setup can continue. Run 'xcode-select --install', finish the macOS installer, then reopen MacNCheese."
 
-    def request_admin_env(self) -> Optional[dict[str, str]]:
-        return os.environ.copy()
+    def check_admin_access(self, password: str) -> tuple[bool, str]:
+        env = os.environ.copy()
+        env["MNC_SUDO_PASSWORD"] = password
+        rc, out = self._run_shell_check("printf '%s\\n' \"$MNC_SUDO_PASSWORD\" | sudo -S -k -v", env=env)
+        if rc == 0:
+            return True, ""
+        user_name = getpass.getuser()
+        groups_rc, groups_out = self._run_shell_check("id -Gn")
+        if groups_rc == 0 and "admin" not in groups_out.split():
+            return False, f"The macOS account '{user_name}' is not an Administrator account. Use an admin account, then try again."
+        return False, "The macOS password was rejected or sudo is unavailable. Enter the same password you use to sign in to macOS, then try again."
 
+    def request_admin_env(self) -> Optional[dict[str, str]]:
+        password, ok = QInputDialog.getText(
+            self,
+            APP_NAME,
+            "Enter your macOS sudo password:",
+            QLineEdit.EchoMode.Password,
+        )
+        if ok and password:
+            env = os.environ.copy()
+            env["MNC_SUDO_PASSWORD"] = password
+            return env
+        return None
 
     def prepare_installer_env(self) -> Optional[dict[str, str]]:
         clt_ok, clt_msg = self.check_clt_installed()
@@ -4738,8 +4583,19 @@ class MainWindow(QMainWindow):
             self.set_status("Xcode Command Line Tools required")
             return None
 
-        return self.request_admin_env()
+        env = self.request_admin_env()
+        if env is None:
+            self.set_status("Setup cancelled")
+            return None
 
+        password = env.get("MNC_SUDO_PASSWORD", "")
+        admin_ok, admin_msg = self.check_admin_access(password)
+        if not admin_ok:
+            QMessageBox.warning(self, APP_NAME, admin_msg)
+            self.set_status(admin_msg)
+            return None
+
+        return env
 
     _ACTION_TITLES: dict[str, str] = {
         "install_tools": "Installing Tools",
@@ -4755,9 +4611,17 @@ class MainWindow(QMainWindow):
 
     def run_installer_action(self, action: str, *, post_action: Optional[str] = None) -> None:
         self.pending_post_install_action = post_action
-        env = self.prepare_installer_env()
-        if env is None:
-            return
+        
+        is_portable = action in ["install_tools", "install_wine"]
+        if is_portable:
+            # We don't need sudo for portable actions
+            env = os.environ.copy()
+            env["MNC_SUDOLESS"] = "1"
+        else:
+            env = self.prepare_installer_env()
+            if env is None:
+                return
+
         script = self.installer_script_path()
         if not script.exists():
             candidates = []
@@ -4783,11 +4647,10 @@ class MainWindow(QMainWindow):
             str(self.dxvk_install32),
             str(self.mesa_dir),
             DEFAULT_MESA_URL,
-            str(self.vkd3d_dir),
-            "",
         ]
         title = self._ACTION_TITLES.get(action, f"Running: {action}")
         self.run_commands([args], env=env, cwd=str(script.parent), progress_title=title)
+
 
     def _version_tuple(self, value: str) -> tuple[int, ...]:
         cleaned = value.strip().lower().lstrip("v")
@@ -4799,7 +4662,7 @@ class MainWindow(QMainWindow):
 
     def check_for_updates(self) -> None:
         try:
-            ctx = _make_ssl_context()
+            ctx = ssl._create_unverified_context()
             req = urllib.request.Request(
                 GITHUB_LATEST_RELEASE_API,
                 headers={"Accept": "application/vnd.github+json", "User-Agent": APP_NAME},
@@ -4831,8 +4694,16 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, APP_NAME, f"Update check failed: {exc}")
 
     def install_tools(self) -> None:
-        self.run_action_in_terminal("install_tools")
+        self.run_installer_action("install_tools")
 
+    def install_wine(self) -> None:
+        patched = self.patched_wine_binary()
+        if patched:
+            self.log(f"Using bundled patched Wine build: {patched}")
+            if hasattr(self, "status_label"):
+                self.status_label.setText("Bundled patched Wine build detected")
+            return
+        self.run_installer_action("install_wine")
 
     def install_mesa(self) -> None:
         self.run_installer_action("install_mesa")
@@ -4840,16 +4711,14 @@ class MainWindow(QMainWindow):
         self.run_installer_action("install_dxmt")
     def install_vkd3d(self) -> None:
         self.run_installer_action("install_vkd3d")
-    def quick_setup(self, *, post_action: Optional[str] = None) -> None:
-        if not self.ensure_wine():
-            self.log("Quick setup paused: Wine is required but not installed.")
-            # We don't return here because ensure_wine triggers the install_wine flow.
-            # However, ensure_wine is non-blocking (shows dialogs).
-            # If the user cancels, it returns None.
-            return
-        self.run_installer_action("quick_setup", post_action=post_action)
+    def quick_setup(self) -> None:
+        self.run_installer_action("quick_setup")
 
+    def install_gptk_full(self) -> None:
+        self.run_installer_action("install_gptk_full")
 
+    def install_d3dmetal3(self) -> None:
+        self.run_installer_action("install_d3dmetal3")
 
     def _build_dxvk(self, *, arch: str) -> None:
         action = "build_dxvk64" if arch == "win64" else "build_dxvk32"
@@ -4903,36 +4772,29 @@ class MainWindow(QMainWindow):
             return base + extras
         return base
 
-    def _get_mesa_bin_dir(self) -> Path:
-        for p in ("x64", "x86", ""):
-            if (self.mesa_dir / p / "opengl32.dll").exists():
-                return self.mesa_dir / p
-        return self.mesa_dir
-
     def patch_selected_game_with_mesa(self, game: GameEntry, exe: Path, *, driver: str) -> str:
         
         wanted = driver
-        mesa_bin = self._get_mesa_bin_dir()
 
         dlls = self.mesa_runtime_dlls_for_driver(wanted)
-        missing = [dll for dll in dlls if not (mesa_bin / dll).exists()]
+        missing = [dll for dll in dlls if not (self.mesa_dir / dll).exists()]
         if missing:
             
             if wanted in (MESA_DRIVER_ZINK, MESA_DRIVER_SWR):
                 self.log(f"Mesa: missing {', '.join(missing)} for '{wanted}', falling back to llvmpipe")
                 wanted = MESA_DRIVER_LLVMPIPE
                 dlls = self.mesa_runtime_dlls_for_driver(wanted)
-                missing = [dll for dll in dlls if not (mesa_bin / dll).exists()]
+                missing = [dll for dll in dlls if not (self.mesa_dir / dll).exists()]
 
         if missing:
             raise FileNotFoundError(
-                f"Missing Mesa DLL(s) in {mesa_bin}: {', '.join(missing)}\n\n"
+                f"Missing Mesa DLL(s) in {self.mesa_dir}: {', '.join(missing)}\n\n"
                 "Please install/extract Mesa x64 to this folder or use the 'Install Mesa' menu option."
             )
 
         
         optional: list[str] = []
-        if wanted == MESA_DRIVER_ZINK and (mesa_bin / "zink_dri.dll").exists():
+        if wanted == MESA_DRIVER_ZINK and (self.mesa_dir / "zink_dri.dll").exists():
             optional.append("zink_dri.dll")
 
         target_dirs: set[Path] = {game.game_dir, exe.parent}
@@ -4949,9 +4811,9 @@ class MainWindow(QMainWindow):
                         pass
 
             for dll in dlls:
-                shutil.copy2(mesa_bin / dll, tdir / dll)
+                shutil.copy2(self.mesa_dir / dll, tdir / dll)
             for dll in optional:
-                shutil.copy2(mesa_bin / dll, tdir / dll)
+                shutil.copy2(self.mesa_dir / dll, tdir / dll)
 
             copied = list(dlls) + optional
             self.log(f"Copied Mesa ({wanted}) DLLs -> {tdir}: {', '.join(copied)}")
@@ -4968,17 +4830,7 @@ class MainWindow(QMainWindow):
         p = Path(DEFAULT_PREFIX).expanduser()
         if not p.exists():
             self.log(f"Auto-creating default Steam prefix at {p}...")
-            # Always ensure Wine is present first
-            if not self.ensure_wine():
-                self.log("Auto-creation of default prefix paused: Waiting for manual Wine setup.")
-                return
-
-            if self.missing_core_tools():
-                self.log("Dependencies missing for prefix initialization. Running quick setup first...")
-                self.quick_setup(post_action="init_prefix")
-            else:
-                self.run_installer_action("init_prefix")
-
+            self.run_installer_action("init_prefix")
 
     def clean_prefix(self) -> None:
         wine = self.ensure_wine()
@@ -5043,7 +4895,7 @@ class MainWindow(QMainWindow):
                 return
             env = self.wine_env()
             proc = QProcess(self)
-            qenv = QProcessEnvironment.systemEnvironment()
+            qenv = self.get_qprocess_env()
             for k, v in env.items():
                 qenv.insert(k, v)
             proc.setProcessEnvironment(qenv)
@@ -5104,7 +4956,7 @@ class MainWindow(QMainWindow):
 
         env.pop("DXVK_LOG_PATH", None)
         env.pop("DXVK_LOG_LEVEL", None)
-        qenv = QProcessEnvironment.systemEnvironment()
+        qenv = self.get_qprocess_env()
         for key, value in env.items():
             qenv.insert(key, value)
         self.steam_process.setProcessEnvironment(qenv)
@@ -5125,7 +4977,7 @@ class MainWindow(QMainWindow):
 
         wine_ok = self.has_wine()
         dxvk_ok = (self.dxvk_install / "bin" / "d3d11.dll").exists()
-        mesa_ok = any((self.mesa_dir / p / "opengl32.dll").exists() for p in ("", "x64", "x86"))
+        mesa_ok = (self.mesa_dir / "opengl32.dll").exists()
 
         steam_installed = (self.steam_dir / "steam.exe").exists()
 
@@ -5301,12 +5153,7 @@ class MainWindow(QMainWindow):
     def scan_games(self) -> None:
         p = self.prefix_path
         s = self.steam_dir
-        
-        # Guard against destroyed state or missing paths
-        if not p or not s:
-            return
-
-        worker = getattr(self, "_scanner_worker", None)
+        worker = self._scanner_worker
         if worker is not None and worker.isRunning():
             if worker.prefix == p:
                 return
@@ -5314,8 +5161,7 @@ class MainWindow(QMainWindow):
                 worker.finished_scan.disconnect(self._on_scan_finished)
             except Exception:
                 pass
-            worker.quit()
-            worker.wait(500) # Give it a moment to stop gracefully
+            worker.deleteLater()
 
         new_worker = LibraryScannerWorker(p, s)
         new_worker.finished_scan.connect(self._on_scan_finished)
@@ -5705,18 +5551,10 @@ class MainWindow(QMainWindow):
             return
 
         removed_count = 0
-        known_dlls = {d.lower() for d in DXVK_DLLS + DXVK_OPTIONAL_DLLS}
-        game_dir_resolved = game.game_dir.resolve()
         try:
+            
             for p in game.game_dir.glob("**/*.dll"):
-                if p.is_symlink() or not p.is_file():
-                    continue
-                try:
-                    if not p.resolve().is_relative_to(game_dir_resolved):
-                        continue
-                except (ValueError, OSError):
-                    continue
-                if p.name.lower() in known_dlls:
+                if p.name.lower() in [d.lower() for d in DXVK_DLLS + DXVK_OPTIONAL_DLLS]:
                     p.unlink()
                     removed_count += 1
             self.log(f"Removed {removed_count} DXVK/Mesa DLLs from {game.game_dir}")
@@ -5802,7 +5640,8 @@ class MainWindow(QMainWindow):
                 effective_backend = LAUNCH_BACKEND_DXMT
             elif kind == "gptk":
                 effective_backend = LAUNCH_BACKEND_GPTK
-
+            elif kind == "d3dmetal3":
+                effective_backend = LAUNCH_BACKEND_D3DMETAL3
 
         
         backend_cmd = resolved_backend.launch_command(game_model, prefix_model)
@@ -5816,33 +5655,12 @@ class MainWindow(QMainWindow):
         self.log(f"Requested backend: {backend_id}")
         self.log(f"Resolved backend: {effective_backend}")
         self.log(f"Runner binary: {wine_bin}")
-        if effective_backend == LAUNCH_BACKEND_GPTK:
-            self.log(f"GPTK DLL dir: {self.gptk_windows_dir}")
+        if effective_backend == LAUNCH_BACKEND_GPTK or effective_backend == LAUNCH_BACKEND_D3DMETAL3:
+            self.log(f"GPTK/D3DMetal DLL dir: {self.gptk_windows_dir}")
 
         if self.game_process and self.game_process.state() != QProcess.ProcessState.NotRunning:
             QMessageBox.warning(self, APP_NAME, "A game process is already running.")
             return
-
-        if game.appid and (not self.steam_process or self.steam_process.state() == QProcess.ProcessState.NotRunning):
-            self.log("Steam is not running. Launching Steam implicitly before the game (no backend overrides).")
-            self.launch_steam(backend=None)
-            
-            from PyQt6.QtWidgets import QProgressDialog
-            progress = QProgressDialog("Warming up Steam background processes...", "Cancel", 0, 100, self)
-            progress.setWindowTitle("Launching Steam")
-            progress.setWindowModality(Qt.WindowModality.ApplicationModal)
-            progress.setMinimumDuration(0)
-            progress.setValue(0)
-            
-            for i in range(100):
-                if progress.wasCanceled():
-                    self.set_status("Game launch cancelled.")
-                    return
-                progress.setValue(i)
-                time.sleep(0.1)
-                QCoreApplication.processEvents()
-            
-            progress.setValue(100)
 
         self.game_process = QProcess(self)
         env = self.wine_env()
@@ -5858,10 +5676,15 @@ class MainWindow(QMainWindow):
         env["DXVK_LOG_LEVEL"] = "info"
         env["DXVK_ASYNC"] = "1"
         env["DXVK_ENABLE_NVAPI"] = "0"
+        try:
+            subprocess.run([self.wineserver_binary(), "-k"], env=env, timeout=5)
+            time.sleep(2)
+        except Exception:
+            pass
         if self.backend_is_mesa(effective_backend) and not effective_mesa_driver:
             effective_mesa_driver = self.mesa_driver_from_backend(effective_backend)
 
-        qenv = QProcessEnvironment.systemEnvironment()
+        qenv = self.get_qprocess_env()
         for key, value in env.items():
             qenv.insert(key, value)
         self.game_process.setProcessEnvironment(qenv)
@@ -5889,20 +5712,28 @@ class MainWindow(QMainWindow):
         self.last_game_launch_ts[game.appid] = time.time()
         self.last_game_wine_log[game.appid] = Path(host_wine_log)
 
-        backend_cmd = resolved_backend.launch_command(game_model, prefix_model)
-
-        if len(backend_cmd) >= 3:
-            wine_binary_to_use = backend_cmd[2]
-            arch_prefix = "arch -x86_64" if backend_cmd[0] == "arch" else ""
+        
+        if effective_backend == LAUNCH_BACKEND_GPTK_FULL:
+            gptk_script = "/usr/local/bin/gameportingtoolkit" if Path("/usr/local/bin/gameportingtoolkit").exists() else "gameportingtoolkit"
+            cmd = f"arch -x86_64 {shlex.quote(gptk_script)} {shlex.quote(str(prefix_model.path))} {shlex.quote(str(exe))} { ' '.join(shlex.quote(a) for a in args) } > {shlex.quote(host_wine_log)} 2>&1"
         else:
-            wine_binary_to_use = self.wine_binary() or "wine"
-            arch_prefix = "arch -x86_64"
+            
+            backend_cmd = resolved_backend.launch_command(game_model, prefix_model)
+            
+            
+            if len(backend_cmd) >= 3:
+                
+                wine_binary_to_use = backend_cmd[2]
+                arch_prefix = "arch -x86_64" if backend_cmd[0] == "arch" else ""
+            else:
+                wine_binary_to_use = self.wine_binary() or "wine"
+                arch_prefix = "arch -x86_64"
 
-        debug_prefix = "WINEDEBUG=+loaddll"
-        if self.backend_is_mesa(effective_backend):
-            debug_prefix = "WINEDEBUG=+loaddll,+wgl,+opengl"
-
-        cmd = f"cd {shlex.quote(str(exe_dir))} && {debug_prefix} {arch_prefix} {shlex.quote(str(wine_binary_to_use))} { ' '.join(shlex.quote(a) for a in args) } > {shlex.quote(host_wine_log)} 2>&1"
+            debug_prefix = "WINEDEBUG=+loaddll"
+            if self.backend_is_mesa(effective_backend):
+                debug_prefix = "WINEDEBUG=+loaddll,+wgl,+opengl"
+            
+            cmd = f"cd {shlex.quote(str(exe_dir))} && {debug_prefix} {arch_prefix} {shlex.quote(str(wine_binary_to_use))} { ' '.join(shlex.quote(a) for a in args) } > {shlex.quote(host_wine_log)} 2>&1"
 
         self.game_process.setProgram("bash")
         self.game_process.setArguments(["-lc", cmd])
@@ -5910,7 +5741,9 @@ class MainWindow(QMainWindow):
         self.game_process.readyReadStandardError.connect(lambda: self._drain_process(self.game_process))
         
         backend_label = "Wine builtin"
-        if effective_backend == LAUNCH_BACKEND_DXVK: backend_label = "DXVK"
+        if effective_backend == LAUNCH_BACKEND_GPTK_FULL: backend_label = "GPTK Full"
+        elif effective_backend == LAUNCH_BACKEND_D3DMETAL3: backend_label = "D3DMetal 3"
+        elif effective_backend == LAUNCH_BACKEND_DXVK: backend_label = "DXVK"
         elif effective_backend == LAUNCH_BACKEND_VKD3D: backend_label = "VKD3D-Proton"
         elif effective_backend == LAUNCH_BACKEND_DXMT: backend_label = "DXMT"
         elif self.backend_is_mesa(effective_backend): backend_label = f"Mesa {effective_mesa_driver}"
