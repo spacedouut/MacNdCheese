@@ -12,6 +12,7 @@ import sys
 import time
 import urllib.request
 import webbrowser
+import platform
 import getpass
 import signal
 from dataclasses import dataclass, field
@@ -504,7 +505,11 @@ class SettingsDialog(QDialog):
         def _is_tools():
             # install_tools installs: git, p7zip (7z/7zz), winetricks via Homebrew
             # shutil.which may miss Homebrew paths inside a .app bundle, so check explicitly
-            _brew_dirs = [Path("/opt/homebrew/bin"), Path("/usr/local/bin")]
+            _brew_dirs = [
+                Path("/opt/homebrew/bin"),
+                Path("/usr/local/bin"),
+                PORTABLE_DIR / "bin"
+            ]
 
             def _find(name):
                 if shutil.which(name):
@@ -576,7 +581,7 @@ class SettingsDialog(QDialog):
             return
         for cb, _, _ in self._component_actions:
             cb.setChecked(True)
-        self._install_selected()
+        self._install_uninstall_selected()
 
     def _build_dev_tab(self) -> QWidget:
         widget = QWidget()
@@ -796,7 +801,7 @@ class _InstallProgressDialog(QDialog):
 MODERN_THEME = """
 QWidget {
     color: #FFFFFF;
-    font-family: "Inter", "Segoe UI", Arial, sans-serif;
+    font-family: ".AppleSystemUIFont", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     font-size: 13px;
 }
 
@@ -2727,7 +2732,8 @@ class MainWindow(QMainWindow):
         self.startup_update_check()
         self.log(f"{APP_NAME} ready")
         self._sync_sidebar_prefix_buttons()
-        QTimer.singleShot(500, self._ensure_default_prefix)
+        QTimer.singleShot(1000, self._ensure_steam_bottle)
+        QTimer.singleShot(2500, self._auto_preflight_check)
 
     def load_user_settings(self) -> None:
         self.user_settings_path = Path.home() / ".macncheese_settings.json"
@@ -4072,8 +4078,8 @@ class MainWindow(QMainWindow):
         action_mesa.triggered.connect(self.install_mesa)
         action_dxmt.triggered.connect(self.install_dxmt)
         action_vkd3d.triggered.connect(self.install_vkd3d)
-        action_dxvk64.triggered.connect(self.build_dxvk)
-        action_dxvk32.triggered.connect(self.build_dxvk32)
+        action_dxvk64.triggered.connect(self.install_dxvk)
+        action_dxvk32.triggered.connect(self.install_dxvk)
         action_wine.triggered.connect(self.install_wine)
         action_steam.triggered.connect(self.install_steam)
         menu.exec(card_widget.mapToGlobal(pos))
@@ -4263,6 +4269,10 @@ class MainWindow(QMainWindow):
             return patched
 
         for candidate in (
+            str(PORTABLE_DIR / "Wine Stable.app" / "Contents" / "Resources" / "wine" / "bin" / "wine64"),
+            str(PORTABLE_DIR / "Wine Stable.app" / "Contents" / "Resources" / "wine" / "bin" / "wine"),
+            str(PORTABLE_DIR / "Wine Staging.app" / "Contents" / "Resources" / "wine" / "bin" / "wine64"),
+            str(PORTABLE_DIR / "Wine Staging.app" / "Contents" / "Resources" / "wine" / "bin" / "wine"),
             str(PORTABLE_DIR / "bin" / "wine64"),
             str(PORTABLE_DIR / "bin" / "wine"),
             shutil.which("wine64"),
@@ -4287,6 +4297,8 @@ class MainWindow(QMainWindow):
             return patched
 
         for candidate in (
+            str(PORTABLE_DIR / "Wine Stable.app" / "Contents" / "Resources" / "wine" / "bin" / "wineserver"),
+            str(PORTABLE_DIR / "Wine Staging.app" / "Contents" / "Resources" / "wine" / "bin" / "wineserver"),
             str(PORTABLE_DIR / "bin" / "wineserver"),
             shutil.which("wineserver"),
             "/usr/local/bin/wineserver",
@@ -4452,9 +4464,56 @@ class MainWindow(QMainWindow):
             from PyQt6.QtCore import QTimer
             QTimer.singleShot(800, lambda: self._show_post_install_exe_picker(post_prefix))
         elif ok and not pending_exe and getattr(self, "interactive_install_action", None) == "quick_setup":
-             # If we just finished quick_setup but had no pending exe, maybe we should init prefix?
-             # Actually, _open_create_bottle_dialog already initiated the action.
              pass
+
+    def _is_tool_installed(self, name: str) -> bool:
+        """Check if a core tool (git, 7z, winetricks) is available in common paths or portable dir."""
+        _brew_dirs = [
+            Path("/opt/homebrew/bin"),
+            Path("/usr/local/bin"),
+            PORTABLE_DIR / "bin"
+        ]
+        if shutil.which(name):
+            return True
+        return any((d / name).exists() for d in _brew_dirs)
+
+    def get_missing_dependencies(self) -> list[str]:
+        missing: list[str] = []
+        if not self._is_tool_installed("git"): missing.append("Git")
+        if not (self._is_tool_installed("7z") or self._is_tool_installed("7zz")): missing.append("7-Zip")
+        if not self._is_tool_installed("winetricks"): missing.append("Winetricks")
+        if not self.has_wine(): missing.append("Wine")
+
+        # Check DXVK
+        # Check DXVK - prebuilt repack might only have d3d11.dll or dxgi.dll in some cases
+        dxvk_dir = Path(self.dxvk_install_edit.text()).expanduser()
+        has_d3d11 = (dxvk_dir / "bin" / "d3d11.dll").exists()
+        has_dxgi = (dxvk_dir / "bin" / "dxgi.dll").exists()
+        # Some portable DXVK-macOS builds put them in slightly different spots or only include d3d11
+        if not (has_d3d11 or has_dxgi):
+            missing.append("DXVK")
+
+        # Check Mesa
+        mesa_dir = Path(self.mesa_dir_edit.text()).expanduser()
+        if not (mesa_dir / "opengl32.dll").exists():
+            missing.append("Mesa")
+
+        return missing
+
+    def _auto_preflight_check(self) -> None:
+        if self.interactive_install_in_progress:
+            return
+        missing = self.get_missing_dependencies()
+        if missing:
+            self.log(f"Auto-scan: Missing {', '.join(missing)}. Starting automatic setup...")
+            self.quick_setup()
+
+    def _is_rosetta_installed(self) -> bool:
+        try:
+            # pgrep oahd returns 0 if Rosetta is running
+            return subprocess.run(["pgrep", "oahd"], capture_output=True).returncode == 0
+        except Exception:
+            return False
 
     def has_wine(self) -> bool:
         try:
@@ -4611,12 +4670,27 @@ class MainWindow(QMainWindow):
 
     def run_installer_action(self, action: str, *, post_action: Optional[str] = None) -> None:
         self.pending_post_install_action = post_action
+        self.interactive_install_action = action
         
-        is_portable = action in ["install_tools", "install_wine"]
-        if is_portable:
-            # We don't need sudo for portable actions
-            env = os.environ.copy()
-            env["MNC_SUDOLESS"] = "1"
+        is_sudoless_action = action in [
+            "install_tools", "install_wine", "quick_setup", "init_prefix",
+            "install_dxvk", "install_mesa", "install_dxmt", "install_vkd3d",
+            "install_d3dmetal", "install_d3dmetal3", "build_dxvk64", "build_dxvk32"
+        ]
+        if is_sudoless_action:
+            # Check for Rosetta 2 if on Apple Silicon – this is the ONLY thing that might need sudo
+            if platform.machine() == "arm64" and not self._is_rosetta_installed():
+                QMessageBox.information(
+                    self,
+                    APP_NAME,
+                    "Rosetta 2 is required to run Wine on Apple Silicon.\n\n"
+                    "macOS will now request your administrator password to install it. "
+                    "All other components will then continue installing without sudo."
+                )
+                env = self.prepare_installer_env()
+            else:
+                env = os.environ.copy()
+                env["MNC_SUDOLESS"] = "1"
         else:
             env = self.prepare_installer_env()
             if env is None:
@@ -4826,11 +4900,21 @@ class MainWindow(QMainWindow):
             return
         self.run_installer_action("init_prefix")
 
-    def _ensure_default_prefix(self) -> None:
+    def _ensure_steam_bottle(self) -> None:
         p = Path(DEFAULT_PREFIX).expanduser()
+        # Initialize prefix if missing
         if not p.exists():
             self.log(f"Auto-creating default Steam prefix at {p}...")
             self.run_installer_action("init_prefix")
+        
+        # Ensure it has a name "Steam" in metadata
+        prefix_key = str(p.resolve())
+        data = self._get_bottle_data(prefix_key)
+        if not data.get("name"):
+            self.log(f"Setting default bottle name to 'Steam' for {prefix_key}")
+            self._set_bottle_data(prefix_key, name="Steam")
+            self._sync_sidebar_prefix_buttons()
+
 
     def clean_prefix(self) -> None:
         wine = self.ensure_wine()
