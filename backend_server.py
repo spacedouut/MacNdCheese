@@ -57,11 +57,11 @@ DEFAULT_DXVK_INSTALL = Path.home() / "dxvk-release"
 DEFAULT_MESA_DIR = Path.home() / "mesa" / "x64"
 DEFAULT_DXMT_DIR = Path.home() / "dxmt"
 DEFAULT_VKD3D_DIR = Path.home() / "vkd3d-proton"
-DEFAULT_GPTK_DIR = Path(__file__).resolve().parent / "gptk"
+DEFAULT_GPTK_DIR = Path.home() / "gptk"
 GPTK3_ROOT = Path.home() / "gptk3" / "Game Porting Toolkit.app"
 
 DXVK_DLLS = ("d3d11.dll", "d3d10core.dll")
-GPTK_REQUIRED_DLLS = ("dxgi.dll", "d3d11.dll", "d3d12.dll")
+GPTK_REQUIRED_DLLS = ("atidxx64.dll", "d3d10.dll", "d3d11.dll", "d3d12.dll", "dxgi.dll", "nvapi64.dll", "nvngx.dll")
 
 SKIP_EXE_TOKENS = (
     "crash", "reporter", "setup", "install", "unins",
@@ -191,16 +191,11 @@ def _find_moltenvk_icd() -> str:
 # ---------------------------------------------------------------------------
 
 def _wine_env(prefix: str) -> Dict[str, str]:
+    """Base Wine environment — matches original MainWindow.wine_env().
+    Does NOT set WINEDLLOVERRIDES; that is handled by _apply_backend_env()."""
     env = dict(os.environ)
     env["WINEPREFIX"] = prefix
     env["WINEDEBUG"] = "-all"
-    env["WINEDLLOVERRIDES"] = (
-        "nvapi,nvapi64=;"
-        "dxgi,d3d11,d3d10core=n,b;"
-        "mf,mfplat,mfreadwrite,mfplay=b"
-    )
-    env["DXVK_ASYNC"] = "1"
-    env["DXVK_ENABLE_NVAPI"] = "0"
 
     portable_bin = str(PORTABLE_DIR / "bin")
     path = env.get("PATH", "")
@@ -224,28 +219,37 @@ def _mesa_available() -> bool:
     return (DEFAULT_MESA_DIR / "opengl32.dll").exists()
 
 def _vkd3d_available() -> bool:
-    return DEFAULT_VKD3D_DIR.exists() and (DEFAULT_VKD3D_DIR / "d3d12.dll").exists()
+    # DLLs live in x86/ subfolder (same layout as DXVK)
+    vkd3d_bin = DEFAULT_VKD3D_DIR / "x86"
+    return vkd3d_bin.exists() and (vkd3d_bin / "d3d12.dll").exists()
 
 def _dxmt_available() -> bool:
     return DEFAULT_DXMT_DIR.exists() and (DEFAULT_DXMT_DIR / "d3d11.dll").exists()
 
+def _find_gptk_wine_root() -> Optional[Path]:
+    """Find the GPTK toolkit wine root (contains bin/wine64, lib/, etc.)."""
+    candidates = [
+        GPTK3_ROOT / "Contents" / "Resources" / "wine",
+        DEFAULT_GPTK_DIR / "lib" / "wine" / "Game Porting Toolkit.app" / "Contents" / "Resources" / "wine",
+    ]
+    for c in candidates:
+        if (c / "bin" / "wine64").exists():
+            return c
+    return None
+
 def _gptk_available() -> bool:
     dll_dir = DEFAULT_GPTK_DIR / "lib" / "wine" / "x86_64-windows"
-    return dll_dir.exists() and all((dll_dir / name).exists() for name in GPTK_REQUIRED_DLLS)
+    has_dlls = dll_dir.exists() and all((dll_dir / name).exists() for name in GPTK_REQUIRED_DLLS)
+    has_wine = _find_gptk_wine_root() is not None
+    return has_dlls and has_wine
 
 def _gptk_full_available() -> bool:
     return Path("/usr/local/bin/gameportingtoolkit").exists() or shutil.which("gameportingtoolkit") is not None
 
-def _d3dmetal3_available() -> bool:
-    wine64 = GPTK3_ROOT / "Contents" / "Resources" / "wine" / "bin" / "wine64"
-    return wine64.exists()
-
 
 def _resolve_auto_backend() -> str:
     """Pick the best available backend, matching AutoBackend.resolve() logic."""
-    # Prefer D3DMetal3 > GPTK > DXVK > wine builtin
-    if _d3dmetal3_available():
-        return BACKEND_D3DMETAL3
+    # Prefer GPTK > DXVK > wine builtin
     if _gptk_available():
         return BACKEND_GPTK
     if _dxvk_available():
@@ -254,22 +258,26 @@ def _resolve_auto_backend() -> str:
 
 
 def _apply_backend_env(env: Dict[str, str], backend: str) -> Dict[str, str]:
-    """Apply backend-specific environment variables matching MacNCheese.py Backend classes."""
+    """Apply backend-specific environment variables matching MacNCheese.py Backend classes.
+
+    Flow matches original: backend sets its overrides from clean slate,
+    then mandatory overrides are prepended (line 5798 in MacNCheese.py).
+    """
     env = dict(env)
     env["WINE_MF_MFT_SKIP_VERIFY"] = "1"
 
+    # Each backend sets WINEDLLOVERRIDES from scratch (no leftover base overrides)
+    backend_ovr = ""
+
     if backend == BACKEND_WINE:
-        # Wine builtin - no DXVK/Mesa
-        env["WINEDLLOVERRIDES"] = "dxgi,d3d11,d3d10core=b"
+        backend_ovr = "dxgi,d3d11,d3d10core=b"
         env.pop("DXVK_LOG_PATH", None)
         env.pop("DXVK_LOG_LEVEL", None)
         env.pop("GALLIUM_DRIVER", None)
         env.pop("MESA_GLTHREAD", None)
 
     elif backend == BACKEND_DXVK:
-        ovr = env.get("WINEDLLOVERRIDES", "")
-        dxvk_ovr = "dxgi,d3d11,d3d10core=n,b"
-        env["WINEDLLOVERRIDES"] = f"{ovr};{dxvk_ovr}" if ovr else dxvk_ovr
+        backend_ovr = "dxgi,d3d11,d3d10core=n,b"
         dxvk_log_dir = str(Path.home() / "dxvk-logs")
         Path(dxvk_log_dir).mkdir(parents=True, exist_ok=True)
         env["DXVK_LOG_PATH"] = dxvk_log_dir
@@ -282,23 +290,19 @@ def _apply_backend_env(env: Dict[str, str], backend: str) -> Dict[str, str]:
         env.pop("MESA_GLTHREAD", None)
 
     elif backend.startswith("mesa:"):
-        driver = backend.split(":", 1)[1]  # llvmpipe, zink, or swr
+        driver = backend.split(":", 1)[1]
         env["GALLIUM_DRIVER"] = driver
-        ovr = env.get("WINEDLLOVERRIDES", "")
-        mesa_ovr = "opengl32=n,b"
-        env["WINEDLLOVERRIDES"] = f"{ovr};{mesa_ovr}" if ovr else mesa_ovr
+        backend_ovr = "opengl32=n,b"
         env["MESA_GLTHREAD"] = "true"
         env.pop("DXVK_LOG_PATH", None)
         env.pop("DXVK_LOG_LEVEL", None)
 
     elif backend == BACKEND_VKD3D:
-        vkd3d_path = str(DEFAULT_VKD3D_DIR)
-        env["VKD3D_PROTON_PATH"] = vkd3d_path
-        ovr = env.get("WINEDLLOVERRIDES", "")
-        vkd3d_ovr = "d3d12,d3d12core,dxgi=n,b"
-        env["WINEDLLOVERRIDES"] = f"{ovr};{vkd3d_ovr}" if ovr else vkd3d_ovr
+        vkd3d_bin = str(DEFAULT_VKD3D_DIR / "x86")
+        env["VKD3D_PROTON_PATH"] = vkd3d_bin
+        backend_ovr = "d3d12,d3d12core,dxgi=n,b"
         existing_winepath = env.get("WINEPATH", "")
-        env["WINEPATH"] = vkd3d_path if not existing_winepath else f"{vkd3d_path};{existing_winepath}"
+        env["WINEPATH"] = vkd3d_bin if not existing_winepath else f"{vkd3d_bin};{existing_winepath}"
         env.pop("DXVK_LOG_PATH", None)
         env.pop("DXVK_LOG_LEVEL", None)
         env.pop("GALLIUM_DRIVER", None)
@@ -308,9 +312,7 @@ def _apply_backend_env(env: Dict[str, str], backend: str) -> Dict[str, str]:
     elif backend == BACKEND_DXMT:
         dxmt_path = str(DEFAULT_DXMT_DIR)
         env["DXMT_PATH"] = dxmt_path
-        ovr = env.get("WINEDLLOVERRIDES", "")
-        dxmt_ovr = "dxgi,d3d11=n,b"
-        env["WINEDLLOVERRIDES"] = f"{ovr};{dxmt_ovr}" if ovr else dxmt_ovr
+        backend_ovr = "dxgi,d3d11=n,b"
         existing_winepath = env.get("WINEPATH", "")
         env["WINEPATH"] = dxmt_path if not existing_winepath else f"{dxmt_path};{existing_winepath}"
         env.pop("DXVK_LOG_PATH", None)
@@ -320,13 +322,19 @@ def _apply_backend_env(env: Dict[str, str], backend: str) -> Dict[str, str]:
 
     elif backend == BACKEND_GPTK:
         dll_dir = str(DEFAULT_GPTK_DIR / "lib" / "wine" / "x86_64-windows")
-        env["WINEPATH"] = dll_dir
+        wine_root = _find_gptk_wine_root()
+        if wine_root:
+            lib_dir = wine_root / "lib"
+            unix_lib_dir = lib_dir / "wine" / "x86_64-unix"
+            external_lib_dir = lib_dir / "external"
+            env["DYLD_LIBRARY_PATH"] = ":".join([str(unix_lib_dir), str(lib_dir), str(external_lib_dir)])
+            env["DYLD_SHARED_REGION"] = "avoid"
+            env["WINEESYNC"] = "1"
         wineserver = _find_wineserver()
         if wineserver:
             env["WINESERVER"] = wineserver
-        ovr = env.get("WINEDLLOVERRIDES", "")
-        gptk_ovr = "dxgi,d3d11,d3d12=n,b"
-        env["WINEDLLOVERRIDES"] = f"{ovr};{gptk_ovr}" if ovr else gptk_ovr
+        env["WINEPATH"] = dll_dir
+        backend_ovr = "atidxx64,d3d10,d3d11,d3d12,dxgi,nvapi64,nvngx=n,b"
         env.pop("DXVK_LOG_PATH", None)
         env.pop("DXVK_LOG_LEVEL", None)
         env.pop("VKD3D_PROTON_PATH", None)
@@ -339,35 +347,23 @@ def _apply_backend_env(env: Dict[str, str], backend: str) -> Dict[str, str]:
         if wineserver:
             env["WINESERVER"] = wineserver
 
-    elif backend == BACKEND_D3DMETAL3:
-        wineserver = _find_wineserver()
-        if wineserver:
-            env["WINESERVER"] = wineserver
-        wine_res = GPTK3_ROOT / "Contents" / "Resources" / "wine"
-        lib_dir = wine_res / "lib"
-        unix_lib_dir = lib_dir / "wine" / "x86_64-unix"
-        external_lib_dir = lib_dir / "external"
-        env["DYLD_LIBRARY_PATH"] = ":".join([str(unix_lib_dir), str(lib_dir), str(external_lib_dir)])
-        env["WINEPATH"] = str(wine_res / "bin")
-        env["DYLD_SHARED_REGION"] = "avoid"
-        ovr = env.get("WINEDLLOVERRIDES", "")
-        m3_ovr = "d3d11,d3d12,dxgi=n"
-        env["WINEDLLOVERRIDES"] = f"{ovr};{m3_ovr}" if ovr else m3_ovr
-        env["WINEDEBUG"] = "-all"
-        env["WINEESYNC"] = "1"
+    # Mandatory overrides prepended (matching MacNCheese.py line 5798).
+    # In Wine, first match for a DLL wins, so mandatory comes first.
+    # Note: nvapi/nvapi64 disabled unless GPTK backend needs them.
+    if backend == BACKEND_GPTK:
+        mandatory_ovr = "mf,mfplat,mfreadwrite,mfplay=b"
+    else:
+        mandatory_ovr = "nvapi,nvapi64=;mf,mfplat,mfreadwrite,mfplay=b"
+    if backend_ovr:
+        env["WINEDLLOVERRIDES"] = f"{mandatory_ovr};{backend_ovr}"
+    else:
+        env["WINEDLLOVERRIDES"] = mandatory_ovr
 
-    # Apply mandatory overrides on top (matching MacNCheese.py line 5798)
-    mandatory_ovr = "nvapi,nvapi64=;dxgi,d3d11,d3d10core=n,b;mf,mfplat,mfreadwrite,mfplay=b"
-    curr_ovr = env.get("WINEDLLOVERRIDES", "").strip(";")
-    env["WINEDLLOVERRIDES"] = f"{mandatory_ovr};{curr_ovr}" if curr_ovr else mandatory_ovr
-
-    # Always set DXVK defaults
+    # DXVK log dir always created (for Steam launch etc.)
     dxvk_log_dir = str(Path.home() / "dxvk-logs")
     Path(dxvk_log_dir).mkdir(parents=True, exist_ok=True)
     env.setdefault("DXVK_LOG_PATH", dxvk_log_dir)
     env.setdefault("DXVK_LOG_LEVEL", "info")
-    env.setdefault("DXVK_ASYNC", "1")
-    env.setdefault("DXVK_ENABLE_NVAPI", "0")
     env["WINEDEBUG"] = "-all"
 
     return env
@@ -375,10 +371,10 @@ def _apply_backend_env(env: Dict[str, str], backend: str) -> Dict[str, str]:
 
 def _backend_wine_binary(backend: str, exe: str) -> Optional[str]:
     """Return the wine binary for backends that need a special one, else None."""
-    if backend == BACKEND_D3DMETAL3:
-        wine64 = GPTK3_ROOT / "Contents" / "Resources" / "wine" / "bin" / "wine64"
-        if wine64.exists():
-            return str(wine64)
+    if backend == BACKEND_GPTK:
+        wine_root = _find_gptk_wine_root()
+        if wine_root:
+            return str(wine_root / "bin" / "wine64")
     if backend == BACKEND_GPTK_FULL:
         gptk_bin = "/usr/local/bin/gameportingtoolkit"
         if Path(gptk_bin).exists():
@@ -396,15 +392,6 @@ def _backend_launch_cmd(backend: str, wine: str, exe_dir: str, exe_name: str,
         return (
             f"arch -x86_64 {shlex.quote(gptk_bin)} {shlex.quote(prefix)} "
             f"{shlex.quote(exe_full)} {quoted_args} "
-            f"> {shlex.quote(log_path)} 2>&1"
-        )
-
-    if backend == BACKEND_D3DMETAL3:
-        wine64 = str(GPTK3_ROOT / "Contents" / "Resources" / "wine" / "bin" / "wine64")
-        return (
-            f"cd {shlex.quote(exe_dir)} && "
-            f"WINEDEBUG=+loaddll arch -x86_64 {shlex.quote(wine64)} "
-            f"{shlex.quote(exe_name)} {quoted_args} "
             f"> {shlex.quote(log_path)} 2>&1"
         )
 
@@ -515,15 +502,60 @@ def _prepare_game_for_backend(backend: str, exe_path: Path, install_dir: str) ->
                 shutil.copy2(str(DEFAULT_MESA_DIR / dll), str(tdir / dll))
             log(f"Copied Mesa ({driver}) DLLs -> {tdir}")
 
-    elif backend in (BACKEND_GPTK, BACKEND_GPTK_FULL, BACKEND_D3DMETAL3):
-        # These backends need DXVK DLLs removed (unpatch)
+    elif backend == BACKEND_VKD3D:
+        vkd3d_bin = DEFAULT_VKD3D_DIR / "x86"
+        vkd3d_dlls = ("d3d12.dll", "d3d12core.dll")
+        vkd3d_optional = ("dxgi.dll",)
+        if not all((vkd3d_bin / dll).exists() for dll in vkd3d_dlls):
+            log(f"VKD3D DLLs not found at {vkd3d_bin}, skipping patch")
+        else:
+            for tdir in target_dirs:
+                tdir.mkdir(parents=True, exist_ok=True)
+                for dll in vkd3d_dlls:
+                    shutil.copy2(str(vkd3d_bin / dll), str(tdir / dll))
+                for dll in vkd3d_optional:
+                    if (vkd3d_bin / dll).exists():
+                        shutil.copy2(str(vkd3d_bin / dll), str(tdir / dll))
+                log(f"Copied VKD3D-Proton DLLs -> {tdir}")
+
+    elif backend == BACKEND_DXMT:
+        dxmt_dlls = ("d3d11.dll", "dxgi.dll")
+        if not all((DEFAULT_DXMT_DIR / dll).exists() for dll in dxmt_dlls):
+            log(f"DXMT DLLs not found at {DEFAULT_DXMT_DIR}, skipping patch")
+        else:
+            for tdir in target_dirs:
+                tdir.mkdir(parents=True, exist_ok=True)
+                for dll in dxmt_dlls:
+                    if (DEFAULT_DXMT_DIR / dll).exists():
+                        shutil.copy2(str(DEFAULT_DXMT_DIR / dll), str(tdir / dll))
+                log(f"Copied DXMT DLLs -> {tdir}")
+
+    elif backend == BACKEND_GPTK:
+        # Copy GPTK DLLs into game directory
+        gptk_dll_dir = DEFAULT_GPTK_DIR / "lib" / "wine" / "x86_64-windows"
+        if not gptk_dll_dir.exists():
+            log(f"GPTK DLL dir not found at {gptk_dll_dir}, skipping patch")
+        else:
+            _unpatch_dxvk(game_dir)
+            for tdir in target_dirs:
+                tdir.mkdir(parents=True, exist_ok=True)
+                for dll in GPTK_REQUIRED_DLLS:
+                    src = gptk_dll_dir / dll
+                    if src.exists():
+                        shutil.copy2(str(src), str(tdir / dll))
+                log(f"Copied GPTK DLLs -> {tdir}")
+
+    elif backend == BACKEND_GPTK_FULL:
+        # This backend needs DXVK/VKD3D DLLs removed (unpatch)
         _unpatch_dxvk(game_dir)
 
 
+VKD3D_DLLS = ("d3d12.dll", "d3d12core.dll")
+
 def _unpatch_dxvk(game_dir: Path) -> None:
-    """Remove DXVK/Mesa DLLs from game directory (matches unpatch_selected_game)."""
+    """Remove DXVK/VKD3D/Mesa DLLs from game directory (matches unpatch_selected_game)."""
     removed = 0
-    all_dlls = set(d.lower() for d in DXVK_DLLS + DXVK_OPTIONAL_DLLS)
+    all_dlls = set(d.lower() for d in DXVK_DLLS + DXVK_OPTIONAL_DLLS + VKD3D_DLLS)
     try:
         for p in game_dir.glob("**/*.dll"):
             if p.name.lower() in all_dlls:
@@ -868,12 +900,9 @@ def cmd_launch_steam(params: Dict[str, Any]) -> Any:
         )
 
     env = _wine_env(prefix)
-
-    # Set up DXVK log dir (matches original app)
-    dxvk_log_dir = str(Path.home() / "dxvk-logs")
-    Path(dxvk_log_dir).mkdir(parents=True, exist_ok=True)
-    env["DXVK_LOG_PATH"] = dxvk_log_dir
-    env["DXVK_LOG_LEVEL"] = "info"
+    # Steam uses the auto-detected backend env
+    resolved = _resolve_auto_backend()
+    env = _apply_backend_env(env, resolved)
 
     # Kill existing wineserver before starting Steam (match original behaviour)
     wineserver = _find_wineserver()
@@ -919,7 +948,11 @@ def cmd_create_bottle(params: Dict[str, Any]) -> Any:
     if not name:
         raise ValueError("Missing 'name' parameter")
 
-    bottle_path = BOTTLES_BASE / name
+    custom_path = params.get("path")
+    if custom_path:
+        bottle_path = Path(custom_path)
+    else:
+        bottle_path = BOTTLES_BASE / name
     bottle_path.mkdir(parents=True, exist_ok=True)
 
     path_str = str(bottle_path)
@@ -1186,7 +1219,6 @@ def cmd_list_backends(params: Dict[str, Any]) -> Any:
         {"id": BACKEND_DXMT, "label": "DXMT (experimental)", "available": _dxmt_available()},
         {"id": BACKEND_GPTK, "label": "GPTK (D3DMetal)", "available": _gptk_available()},
         {"id": BACKEND_GPTK_FULL, "label": "GPTK Full (Apple Toolkit)", "available": _gptk_full_available()},
-        {"id": BACKEND_D3DMETAL3, "label": "D3DMetal 3 (Prebuilt GPTK)", "available": _d3dmetal3_available()},
     ]
     auto_resolved = _resolve_auto_backend()
     return {"backends": all_backends, "auto_resolved": auto_resolved}
