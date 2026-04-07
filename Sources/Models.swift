@@ -8,6 +8,7 @@ struct Bottle: Identifiable, Codable, Hashable {
     var launcherExe: String?
     var launcherType: String?   // "steam", "custom"; nil treated as "steam" for compat
     var defaultBackend: String? // "auto", "dxvk", etc.
+    var wineBinary: String?     // "auto", "stable", "staging"
 
     /// True when this bottle uses Steam as its launcher.
     var isSteamBottle: Bool {
@@ -21,6 +22,7 @@ struct Bottle: Identifiable, Codable, Hashable {
         case launcherExe = "launcher_exe"
         case launcherType = "launcher_type"
         case defaultBackend = "default_backend"
+        case wineBinary = "wine_binary"
     }
 }
 
@@ -93,21 +95,69 @@ struct BackendsResponse: Codable {
 struct ComponentsStatus: Codable {
     let hasTools: Bool
     let hasWine: Bool
+    let hasWineStable: Bool
+    let hasWineStaging: Bool
     let hasMesa: Bool
     let hasDxvk64: Bool
     let hasDxvk32: Bool
     let hasGptkFull: Bool
     let hasD3dMetal3: Bool
     let hasGptk: Bool
+    let wineVersion: String?
 
     enum CodingKeys: String, CodingKey {
         case hasTools = "has_tools"
         case hasWine = "has_wine"
+        case hasWineStable = "has_wine_stable"
+        case hasWineStaging = "has_wine_staging"
         case hasMesa = "has_mesa"
         case hasDxvk64 = "has_dxvk64"
         case hasDxvk32 = "has_dxvk32"
         case hasGptkFull = "has_gptk_full"
         case hasD3dMetal3 = "has_d3dmetal3"
         case hasGptk = "has_gptk"
+        case wineVersion = "wine_version"
+    }
+}
+
+struct InstallProgress: Codable {
+    let lines: [String]
+    let totalLines: Int
+    let done: Bool
+    let failed: Bool
+    let current: String
+
+    enum CodingKeys: String, CodingKey {
+        case lines
+        case totalLines = "total_lines"
+        case done
+        case failed
+        case current
+    }
+}
+
+struct UpdateInfo: Codable {
+    let cheeseLatestTag: String?
+    let gcenxLatestTag: String?
+    let gcenxLatestName: String?
+    let dxmtLatestTag: String?
+    let dxmtLatestName: String?
+    let toolsUpdateAvailable: Bool
+    let wineUpdateAvailable: Bool
+    let wineStableUpdateAvailable: Bool
+    let wineStagingUpdateAvailable: Bool
+    let dxmtUpdateAvailable: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case cheeseLatestTag = "cheese_latest_tag"
+        case gcenxLatestTag = "gcenx_latest_tag"
+        case gcenxLatestName = "gcenx_latest_name"
+        case dxmtLatestTag = "dxmt_latest_tag"
+        case dxmtLatestName = "dxmt_latest_name"
+        case toolsUpdateAvailable = "tools_update_available"
+        case wineUpdateAvailable = "wine_update_available"
+        case wineStableUpdateAvailable = "wine_stable_update_available"
+        case wineStagingUpdateAvailable = "wine_staging_update_available"
+        case dxmtUpdateAvailable = "dxmt_update_available"
     }
 }

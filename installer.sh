@@ -59,8 +59,10 @@ VKD3D_DEFAULT_URL="https://github.com/mont127/CheeseInstallation/releases/downlo
 GPTK_PACKAGE_URL="https://github.com/mont127/CheeseInstallation/releases/download/v1.0.0/gptk-package.zip"
 
 PORTABLE_BASE_URL="https://github.com/mont127/CheeseInstallation/releases/download/v1.0.0"
+PORTABLE_BASE_TAG="v1.0.0"
 PORTABLE_DEPS_URL="$PORTABLE_BASE_URL/macncheese_deps_arm64.zip"
 PORTABLE_WINE_URL="$PORTABLE_BASE_URL/wine_arm64.tar.xz"
+VERSION_MARKER="$PORTABLE_DIR/.mnc_versions"
 
 # (PORTABLE_DIR and PATH handled at top)
 WORK_DIR="$(mktemp -d /tmp/macncheese-installer.XXXXXX)"
@@ -266,6 +268,15 @@ install_gstreamer_pkg() {
   fi
 }
 
+write_component_version() {
+  mkdir -p "$PORTABLE_DIR"
+  touch "$VERSION_MARKER"
+  tmpfile="${VERSION_MARKER}.tmp"
+  grep -v "^${1}=" "$VERSION_MARKER" > "$tmpfile" 2>/dev/null || true
+  printf '%s=%s\n' "$1" "$2" >> "$tmpfile"
+  mv "$tmpfile" "$VERSION_MARKER"
+}
+
 install_tools() {
   if [ "${MNC_SUDOLESS:-0}" = "1" ]; then
     install_portable_tools
@@ -336,6 +347,7 @@ install_portable_tools() {
   echo "Applying security signatures to portable tools..."
   find "$PORTABLE_DIR" -type f -perm +111 -exec /usr/bin/codesign --force --sign - --timestamp=none {} \; 2>/dev/null || true
   
+  write_component_version "tools" "$PORTABLE_BASE_TAG"
   echo "Portable tools installed to $PORTABLE_DIR"
 }
 install_vkd3d() {
@@ -466,6 +478,34 @@ clone_dxvk_if_missing() {
   fi
 }
 
+install_portable_wine_staging() {
+  echo "Step: Installing Wine Staging (latest from Gcenx/macOS_Wine_builds)..."
+  mkdir -p "$PORTABLE_DIR"
+  api_response=$(curl -s --connect-timeout 20 "https://api.github.com/repos/Gcenx/macOS_Wine_builds/releases/latest" 2>/dev/null || true)
+  if [ -z "$api_response" ]; then
+    echo "Failed to contact GitHub API for Wine Staging"
+    exit 1
+  fi
+  staging_url=$(printf '%s' "$api_response" | grep '"browser_download_url"' | grep 'wine-staging.*\.tar\.xz' | head -n1 | sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/')
+  staging_tag=$(printf '%s' "$api_response" | grep '"tag_name"' | head -n1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+  if [ -z "$staging_url" ]; then
+    echo "Failed to find wine-staging .tar.xz in latest Gcenx release"
+    exit 1
+  fi
+  echo "Downloading Wine Staging $staging_tag from: $staging_url"
+  archive="$WORK_DIR/wine-staging.tar.xz"
+  download_file "$staging_url" "$archive"
+  tar -xJf "$archive" -C "$PORTABLE_DIR" || {
+    echo "Failed to extract wine staging"
+    exit 1
+  }
+  echo "Applying security signatures..."
+  find "$PORTABLE_DIR" -type f -perm +111 -exec /usr/bin/codesign --force --sign - --timestamp=none {} \; 2>/dev/null || true
+  write_component_version "wine_branch" "staging"
+  write_component_version "wine_staging" "$staging_tag"
+  echo "Wine Staging $staging_tag installed to $PORTABLE_DIR"
+}
+
 install_wine_bundle() {
   prime_sudo
   archive="$WORK_DIR/wine-stable.tar.xz"
@@ -522,6 +562,8 @@ install_portable_wine() {
      echo "Failed to extract portable wine"
      exit 1
   }
+  write_component_version "wine_branch" "stable"
+  write_component_version "wine_stable" "$PORTABLE_BASE_TAG"
   echo "Portable wine installed to $PORTABLE_DIR"
 }
 
@@ -591,43 +633,109 @@ install_dxmt() {
   rm -rf "$unpack_dir"
   mkdir -p "$unpack_dir"
 
-  echo "Step: Downloading and installing DXMT DLLs..."
-  download_file "$DXMT_URL" "$archive"
-  tar -xzf "$archive" -C "$unpack_dir"
+  echo "Step: Fetching latest DXMT release from GitHub..."
+  api_response=$(curl -s --connect-timeout 20 "https://api.github.com/repos/3Shain/dxmt/releases/latest" 2>/dev/null || true)
+  if [ -z "$api_response" ]; then
+    echo "Failed to contact GitHub API for DXMT, falling back to default URL"
+    dxmt_url="$DXMT_DEFAULT_URL"
+    dxmt_tag="unknown"
+  else
+    dxmt_url=$(printf '%s' "$api_response" | grep '"browser_download_url"' | grep '\.tar\.gz' | head -n1 | sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/')
+    dxmt_tag=$(printf '%s' "$api_response" | grep '"tag_name"' | head -n1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+    if [ -z "$dxmt_url" ]; then
+      echo "No .tar.gz found in latest DXMT release, falling back to default URL"
+      dxmt_url="$DXMT_DEFAULT_URL"
+      dxmt_tag="unknown"
+    fi
+  fi
 
-  found_dir=""
+  echo "Step: Downloading DXMT $dxmt_tag..."
+  download_file "$dxmt_url" "$archive"
+  tar -xzf "$archive" -C "$unpack_dir" --strip-components=1
+
+  # Pick the x86_64-windows directory for 64-bit PE DLLs
+  win64_dir=""
   for candidate in \
-    "$unpack_dir" \
-    "$unpack_dir/dxmt" \
-    "$unpack_dir/bin" \
-    "$unpack_dir/lib"; do
+    "$unpack_dir/x86_64-windows" \
+    "$unpack_dir/x64-windows" \
+    "$unpack_dir/x64" \
+    "$unpack_dir/x86_64" \
+    "$unpack_dir"; do
     if [ -f "$candidate/d3d11.dll" ] && [ -f "$candidate/dxgi.dll" ]; then
-      found_dir="$candidate"
+      win64_dir="$candidate"
       break
     fi
   done
 
-  if [ -z "$found_dir" ]; then
-    found_dir="$(find "$unpack_dir" -type f \( -name d3d11.dll -o -name dxgi.dll \) -print | head -n1 | xargs -I{} dirname "{}" 2>/dev/null || true)"
-  fi
-
-  if [ -z "$found_dir" ] || [ ! -f "$found_dir/d3d11.dll" ] || [ ! -f "$found_dir/dxgi.dll" ]; then
-    echo "DXMT archive did not contain the expected d3d11.dll and dxgi.dll files"
+  if [ -z "$win64_dir" ]; then
+    echo "DXMT archive did not contain the expected x86_64 d3d11.dll and dxgi.dll"
     exit 1
   fi
 
-  echo "Installing DXMT into $DXMT_DIR"
-  rm -f "$DXMT_DIR/d3d11.dll" "$DXMT_DIR/dxgi.dll"
-  cp -f "$found_dir/d3d11.dll" "$DXMT_DIR/d3d11.dll"
-  cp -f "$found_dir/dxgi.dll" "$DXMT_DIR/dxgi.dll"
-
-  for extra in d3d10core.dll d3d12.dll; do
-    if [ -f "$found_dir/$extra" ]; then
-      cp -f "$found_dir/$extra" "$DXMT_DIR/$extra"
+  # Install Unix .so bridge files into the portable Wine lib directory
+  unix64_dir=""
+  for candidate in \
+    "$unpack_dir/x86_64-unix" \
+    "$unpack_dir/x64-unix"; do
+    if [ -d "$candidate" ]; then
+      unix64_dir="$candidate"
+      break
     fi
   done
 
-  echo "DXMT installed successfully"
+  # Find the portable Wine's x86_64-unix lib dir to install the .so files
+  wine_unix_lib=""
+  for wine_app in "Wine Staging.app" "Wine Stable.app"; do
+    candidate="$PORTABLE_DIR/$wine_app/Contents/Resources/wine/lib/wine/x86_64-unix"
+    if [ -d "$candidate" ]; then
+      wine_unix_lib="$candidate"
+      break
+    fi
+  done
+
+  # Find the portable Wine lib dirs
+  wine_unix_lib=""
+  wine_win64_lib=""
+  for wine_app in "Wine Staging.app" "Wine Stable.app"; do
+    wine_base="$PORTABLE_DIR/$wine_app/Contents/Resources/wine/lib/wine"
+    if [ -d "$wine_base/x86_64-unix" ]; then
+      wine_unix_lib="$wine_base/x86_64-unix"
+      wine_win64_lib="$wine_base/x86_64-windows"
+      break
+    fi
+  done
+
+  if [ -z "$wine_unix_lib" ] || [ -z "$wine_win64_lib" ]; then
+    echo "ERROR: Could not find portable Wine lib dirs — install Wine Stable or Staging first"
+    exit 1
+  fi
+
+  # This is a builtin-dll build: PE DLLs replace Wine's own in its lib directory
+  echo "Installing DXMT PE DLLs into Wine x86_64-windows lib..."
+  for dll in d3d11.dll dxgi.dll winemetal.dll d3d10core.dll; do
+    if [ -f "$win64_dir/$dll" ]; then
+      cp -f "$win64_dir/$dll" "$wine_win64_lib/$dll"
+    fi
+  done
+
+  # Install the Unix bridge (.so) into Wine's x86_64-unix lib
+  echo "Installing DXMT Unix bridge (winemetal.so) into Wine x86_64-unix lib..."
+  cp -f "$unix64_dir"/*.so "$wine_unix_lib/" 2>/dev/null || true
+
+  # Codesign the .so files so macOS will load them
+  echo "Codesigning DXMT bridge files..."
+  find "$wine_unix_lib" -name "winemetal.so" -exec /usr/bin/codesign --force --sign - --timestamp=none {} \; 2>/dev/null || true
+
+  # Also keep a copy in DXMT_DIR so _dxmt_available() detection works
+  mkdir -p "$DXMT_DIR"
+  for dll in d3d11.dll dxgi.dll winemetal.dll d3d10core.dll; do
+    if [ -f "$win64_dir/$dll" ]; then
+      cp -f "$win64_dir/$dll" "$DXMT_DIR/$dll"
+    fi
+  done
+
+  write_component_version "dxmt" "$dxmt_tag"
+  echo "DXMT $dxmt_tag installed successfully"
 }
 
 install_gptk_dlls() {
@@ -695,6 +803,37 @@ init_prefix() {
   fi
 }
 
+uninstall_wine() {
+  echo "Step: Uninstalling Wine Stable..."
+  rm -rf "$PORTABLE_DIR/Wine Stable.app"
+  grep -v "^wine_stable=" "$VERSION_MARKER" > "${VERSION_MARKER}.tmp" 2>/dev/null || true
+  mv "${VERSION_MARKER}.tmp" "$VERSION_MARKER" 2>/dev/null || true
+  echo "Wine Stable removed."
+}
+
+uninstall_wine_staging() {
+  echo "Step: Uninstalling Wine Staging..."
+  rm -rf "$PORTABLE_DIR/Wine Staging.app"
+  grep -v "^wine_staging=" "$VERSION_MARKER" > "${VERSION_MARKER}.tmp" 2>/dev/null || true
+  mv "${VERSION_MARKER}.tmp" "$VERSION_MARKER" 2>/dev/null || true
+  echo "Wine Staging removed."
+}
+
+uninstall_dxvk() {
+  echo "Step: Uninstalling DXVK..."
+  rm -f "$DXVK_INSTALL64/bin/d3d11.dll" "$DXVK_INSTALL64/bin/d3d10core.dll" 2>/dev/null || true
+  rm -f "$DXVK_INSTALL32/bin/d3d11.dll" "$DXVK_INSTALL32/bin/d3d10core.dll" 2>/dev/null || true
+  echo "DXVK removed."
+}
+
+uninstall_dxmt() {
+  echo "Step: Uninstalling DXMT..."
+  rm -f "$DXMT_DIR/d3d11.dll" "$DXMT_DIR/dxgi.dll" "$DXMT_DIR/d3d10core.dll" "$DXMT_DIR/d3d12.dll" 2>/dev/null || true
+  grep -v "^dxmt=" "$VERSION_MARKER" > "${VERSION_MARKER}.tmp" 2>/dev/null || true
+  mv "${VERSION_MARKER}.tmp" "$VERSION_MARKER" 2>/dev/null || true
+  echo "DXMT removed."
+}
+
 quick_setup() {
   ensure_rosetta
   install_portable_tools
@@ -714,8 +853,23 @@ case "$ACTION" in
   install_wine)
     install_wine
     ;;
+  install_wine_staging)
+    install_portable_wine_staging
+    ;;
+  uninstall_wine)
+    uninstall_wine
+    ;;
+  uninstall_wine_staging)
+    uninstall_wine_staging
+    ;;
   install_dxvk)
     install_dxvk
+    ;;
+  uninstall_dxvk)
+    uninstall_dxvk
+    ;;
+  uninstall_dxmt)
+    uninstall_dxmt
     ;;
   build_dxvk64)
     install_tools

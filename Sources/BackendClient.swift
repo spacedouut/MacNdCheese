@@ -136,32 +136,12 @@ final class BackendClient: ObservableObject {
         }
     }
 
-    func launchGame(
-        prefix: String,
-        exe: String,
-        args: String = "",
-        backend: String = "auto",
-        installDir: String = "",
-        retinaMode: Bool = false,
-        esync: Bool? = nil,
-        msync: Bool? = nil
-    ) async {
+    func launchGame(prefix: String, exe: String, args: String = "", backend: String = "auto", installDir: String = "", retinaMode: Bool = false, metalHud: Bool = false) async {
         do {
-            var params: [String: Any] = [
-                "prefix": prefix,
-                "exe": exe,
-                "args": args,
-                "backend": backend,
-                "install_dir": installDir,
-                "retina_mode": retinaMode,
-            ]
-            if let esync {
-                params["esync"] = esync
-            }
-            if let msync {
-                params["msync"] = msync
-            }
-            let result = try await send(cmd: "launch_game", params: params)
+            let result = try await send(cmd: "launch_game", params: [
+                "prefix": prefix, "exe": exe, "args": args, "backend": backend, "install_dir": installDir,
+                "retina_mode": retinaMode, "metal_hud": metalHud
+            ])
             if let data = try? JSONSerialization.data(withJSONObject: result),
                let decoded = try? JSONDecoder().decode(LaunchResult.self, from: data) {
                 runningGamePid = decoded.pid
@@ -370,6 +350,60 @@ final class BackendClient: ObservableObject {
             }
         } catch {
             lastError = "Failed to get components status: \(error.localizedDescription)"
+        }
+        return nil
+    }
+
+    func runInstaller(installerPath: String, actions: [String], prefix: String,
+                      dxvkSrc: String, dxvk64: String, dxvk32: String,
+                      mesa: String, mesaUrl: String, dxmt: String, vkd3d: String) async -> String? {
+        do {
+            let result = try await send(cmd: "run_installer", params: [
+                "installer_path": installerPath,
+                "actions": actions,
+                "prefix": prefix,
+                "dxvk_src": dxvkSrc,
+                "dxvk64": dxvk64,
+                "dxvk32": dxvk32,
+                "mesa": mesa,
+                "mesa_url": mesaUrl,
+                "dxmt": dxmt,
+                "vkd3d": vkd3d,
+            ])
+            if let dict = result as? [String: Any], let jobId = dict["job_id"] as? String {
+                return jobId
+            }
+        } catch {
+            lastError = "Failed to start installer: \(error.localizedDescription)"
+        }
+        return nil
+    }
+
+    func getInstallProgress(jobId: String, offset: Int) async -> InstallProgress? {
+        do {
+            let result = try await send(cmd: "get_install_progress", params: [
+                "job_id": jobId,
+                "offset": offset,
+            ])
+            if let data = try? JSONSerialization.data(withJSONObject: result),
+               let decoded = try? JSONDecoder().decode(InstallProgress.self, from: data) {
+                return decoded
+            }
+        } catch {
+            lastError = "Failed to get install progress: \(error.localizedDescription)"
+        }
+        return nil
+    }
+
+    func getUpdateInfo() async -> UpdateInfo? {
+        do {
+            let result = try await send(cmd: "get_update_info")
+            if let data = try? JSONSerialization.data(withJSONObject: result),
+               let decoded = try? JSONDecoder().decode(UpdateInfo.self, from: data) {
+                return decoded
+            }
+        } catch {
+            lastError = "Failed to get update info: \(error.localizedDescription)"
         }
         return nil
     }

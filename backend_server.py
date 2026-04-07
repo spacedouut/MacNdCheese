@@ -38,6 +38,7 @@ from typing import Any, Dict, List, Optional
 # ---------------------------------------------------------------------------
 
 PORTABLE_DIR = Path.home() / "Library" / "Application Support" / "MacNCheese" / "deps"
+VERSION_MARKER = PORTABLE_DIR / ".mnc_versions"
 BOTTLES_BASE = Path.home() / "Games" / "MacNCheese"
 DEFAULT_PREFIX = str(Path.home() / "wined")
 
@@ -140,23 +141,33 @@ def _resolve_key(path: str) -> str:
 # Wine / wineserver discovery
 # ---------------------------------------------------------------------------
 
-def _get_wine_version(wine_path: str) -> str:
-    """Return the Wine version string (e.g. 'wine-11.0') or 'unknown'."""
-    try:
-        result = subprocess.run(
-            [wine_path, "--version"],
-            capture_output=True, text=True, timeout=5,
-        )
-        return result.stdout.strip() or result.stderr.strip() or "unknown"
-    except Exception:
-        return "unknown"
+def _find_wine_stable() -> Optional[str]:
+    for name in ("wine64", "wine"):
+        p = PORTABLE_DIR / "Wine Stable.app" / "Contents" / "Resources" / "wine" / "bin" / name
+        if p.exists():
+            return str(p)
+    return None
+
+def _find_wine_staging() -> Optional[str]:
+    for name in ("wine64", "wine"):
+        p = PORTABLE_DIR / "Wine Staging.app" / "Contents" / "Resources" / "wine" / "bin" / name
+        if p.exists():
+            return str(p)
+    return None
+
+def _find_wine_for_bottle(wine_binary_pref: str = "auto") -> Optional[str]:
+    """Find wine respecting a per-bottle preference ('stable', 'staging', 'auto')."""
+    if wine_binary_pref == "stable":
+        return _find_wine_stable() or _find_wine()
+    if wine_binary_pref == "staging":
+        return _find_wine_staging() or _find_wine()
+    # auto: prefer stable, fall back to staging, then system
+    return _find_wine()
 
 def _find_wine() -> Optional[str]:
     candidates = [
-        str(PORTABLE_DIR / "Wine Stable.app" / "Contents" / "Resources" / "wine" / "bin" / "wine64"),
-        str(PORTABLE_DIR / "Wine Stable.app" / "Contents" / "Resources" / "wine" / "bin" / "wine"),
-        str(PORTABLE_DIR / "Wine Staging.app" / "Contents" / "Resources" / "wine" / "bin" / "wine64"),
-        str(PORTABLE_DIR / "Wine Staging.app" / "Contents" / "Resources" / "wine" / "bin" / "wine"),
+        _find_wine_stable(),
+        _find_wine_staging(),
         str(PORTABLE_DIR / "bin" / "wine64"),
         str(PORTABLE_DIR / "bin" / "wine"),
         shutil.which("wine64"),
@@ -407,11 +418,7 @@ def _apply_backend_env(env: Dict[str, str], backend: str) -> Dict[str, str]:
         env.setdefault("VKD3D_CONFIG", "")
 
     elif backend == BACKEND_DXMT:
-        dxmt_path = str(DEFAULT_DXMT_DIR)
-        env["DXMT_PATH"] = dxmt_path
-        backend_ovr = "dxgi,d3d11=n,b"
-        existing_winepath = env.get("WINEPATH", "")
-        env["WINEPATH"] = dxmt_path if not existing_winepath else f"{dxmt_path};{existing_winepath}"
+        # builtin-dll=true build: DLLs are in Wine's own lib dir, no override needed
         env.pop("DXVK_LOG_PATH", None)
         env.pop("DXVK_LOG_LEVEL", None)
         env.pop("GALLIUM_DRIVER", None)
@@ -664,16 +671,8 @@ def _prepare_game_for_backend(backend: str, exe_path: Path, install_dir: str) ->
                 log(f"Copied VKD3D-Proton DLLs -> {tdir}")
 
     elif backend == BACKEND_DXMT:
-        dxmt_dlls = ("d3d11.dll", "dxgi.dll")
-        if not all((DEFAULT_DXMT_DIR / dll).exists() for dll in dxmt_dlls):
-            log(f"DXMT DLLs not found at {DEFAULT_DXMT_DIR}, skipping patch")
-        else:
-            for tdir in target_dirs:
-                tdir.mkdir(parents=True, exist_ok=True)
-                for dll in dxmt_dlls:
-                    if (DEFAULT_DXMT_DIR / dll).exists():
-                        shutil.copy2(str(DEFAULT_DXMT_DIR / dll), str(tdir / dll))
-                log(f"Copied DXMT DLLs -> {tdir}")
+        # builtin-dll=true build: DLLs are already in Wine's lib dir — nothing to copy at launch
+        log("DXMT backend: DLLs are in Wine lib dir, no patching needed")
 
     elif backend == BACKEND_GPTK:
         # Copy GPTK DLLs into game directory
@@ -896,6 +895,7 @@ def cmd_list_bottles(params: Dict[str, Any]) -> Any:
             "launcher_exe": bottle.get("launcher_exe", ""),
             "launcher_type": bottle.get("launcher_type", "steam"),
             "default_backend": bottle.get("default_backend", "auto"),
+            "wine_binary": bottle.get("wine_binary", "auto"),
             "game_esync": bottle.get("game_esync", True),
             "game_msync": bottle.get("game_msync", True),
         })
@@ -919,6 +919,7 @@ def cmd_list_bottles(params: Dict[str, Any]) -> Any:
             "launcher_exe": bottle.get("launcher_exe", ""),
             "launcher_type": bottle.get("launcher_type", "steam"),
             "default_backend": bottle.get("default_backend", "auto"),
+            "wine_binary": bottle.get("wine_binary", "auto"),
             "game_esync": bottle.get("game_esync", True),
             "game_msync": bottle.get("game_msync", True),
         })
@@ -1024,6 +1025,7 @@ def cmd_launch_game(params: Dict[str, Any]) -> Any:
     backend = params.get("backend", "auto")
     install_dir = params.get("install_dir", "")
     retina_mode = params.get("retina_mode", False)
+    metal_hud = params.get("metal_hud", False)
     bottle_cfg = _load_bottles().get(_resolve_key(prefix), {})
     esync = params.get("esync")
     if esync is None:
@@ -1045,6 +1047,11 @@ def cmd_launch_game(params: Dict[str, Any]) -> Any:
         backend = _resolve_auto_backend()
     log(f"Resolved graphics backend: {backend}")
 
+    # Find wine binary (may be overridden by backend or per-bottle preference)
+    key = _resolve_key(prefix)
+    bottle_cfg = _load_bottles().get(key, {})
+    wine_pref = bottle_cfg.get("wine_binary", "auto")
+    wine = _backend_wine_binary(backend, exe) or _find_wine_for_bottle(wine_pref)
     # D3DMetal3: launch Steam in Mini Games List mode first, then the game
     # under GPTK wine64. Steam must be running for CS2 / Source 2 games to
     # authenticate, and minigameslist mode skips the crashy steamwebhelper.
@@ -1080,6 +1087,9 @@ def cmd_launch_game(params: Dict[str, Any]) -> Any:
     env = _wine_env(prefix)
     env = _apply_backend_env(env, backend)
     env = _apply_sync_env(env, esync, msync)
+
+    if metal_hud:
+        env["MTL_HUD_ENABLED"] = "1"
 
     # Apply retina/DPI settings via regedit
     _apply_retina_regedit(wine, env, retina_mode)
@@ -1636,20 +1646,109 @@ def _tool_available(name: str) -> bool:
     return False
 
 
+def _read_version_marker(component: str) -> Optional[str]:
+    """Read an installed version tag from the marker file."""
+    if not VERSION_MARKER.exists():
+        return None
+    for line in VERSION_MARKER.read_text().splitlines():
+        if line.startswith(f"{component}="):
+            return line.split("=", 1)[1].strip()
+    return None
+
+
+def _get_wine_version() -> Optional[str]:
+    """Run wine --version and return the raw version string."""
+    wine = _find_wine()
+    if not wine:
+        return None
+    try:
+        result = subprocess.run(
+            [wine, "--version"],
+            capture_output=True, text=True, timeout=8
+        )
+        return result.stdout.strip() or None
+    except Exception:
+        return None
+
+
+# Simple in-process cache: {cache_key: (timestamp, value)}
+_github_cache: Dict[str, Any] = {}
+_GITHUB_CACHE_TTL = 3600  # 1 hour
+
+
+def _fetch_latest_github_release(owner: str, repo: str) -> Optional[Dict[str, Any]]:
+    """Fetch latest release info from GitHub API, with 1-hour cache."""
+    cache_key = f"{owner}/{repo}"
+    cached = _github_cache.get(cache_key)
+    if cached and (time.time() - cached[0]) < _GITHUB_CACHE_TTL:
+        return cached[1]
+    try:
+        url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+        req = urllib.request.Request(url, headers={"User-Agent": "MacNCheese/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+            _github_cache[cache_key] = (time.time(), data)
+            return data
+    except Exception:
+        return None
+
+
+def cmd_get_update_info(params: Dict[str, Any]) -> Any:
+    """Check GitHub for latest release versions and compare with installed markers."""
+    cheese_release = _fetch_latest_github_release("mont127", "CheeseInstallation")
+    gcenx_release = _fetch_latest_github_release("Gcenx", "macOS_Wine_builds")
+    dxmt_release = _fetch_latest_github_release("3Shain", "dxmt")
+
+    cheese_tag = cheese_release.get("tag_name") if cheese_release else None
+    gcenx_tag = gcenx_release.get("tag_name") if gcenx_release else None
+    gcenx_name = (gcenx_release.get("name") or gcenx_tag) if gcenx_release else None
+    dxmt_tag = dxmt_release.get("tag_name") if dxmt_release else None
+    dxmt_name = (dxmt_release.get("name") or dxmt_tag) if dxmt_release else None
+
+    installed_tools = _read_version_marker("tools")
+    installed_wine_stable = _read_version_marker("wine_stable")
+    installed_wine_staging = _read_version_marker("wine_staging")
+    installed_dxmt = _read_version_marker("dxmt")
+
+    tools_update = bool(cheese_tag and installed_tools and cheese_tag != installed_tools)
+    wine_stable_update = bool(cheese_tag and installed_wine_stable and cheese_tag != installed_wine_stable)
+    wine_staging_update = bool(gcenx_tag and installed_wine_staging and gcenx_tag != installed_wine_staging)
+    dxmt_update = bool(dxmt_tag and installed_dxmt and dxmt_tag != installed_dxmt)
+
+    return {
+        "cheese_latest_tag": cheese_tag,
+        "gcenx_latest_tag": gcenx_tag,
+        "gcenx_latest_name": gcenx_name,
+        "dxmt_latest_tag": dxmt_tag,
+        "dxmt_latest_name": dxmt_name,
+        "tools_update_available": tools_update,
+        "wine_update_available": wine_stable_update or wine_staging_update,
+        "wine_stable_update_available": wine_stable_update,
+        "wine_staging_update_available": wine_staging_update,
+        "dxmt_update_available": dxmt_update,
+    }
+
+
 def cmd_get_components_status(params: Dict[str, Any]) -> Any:
     """Return installation status for each setup component."""
     has_tools = all(_tool_available(t) for t in ("git", "7z", "winetricks"))
     dxvk32_install = Path.home() / "dxvk-release-32"
     has_dxvk32 = (dxvk32_install / "bin" / "d3d11.dll").exists()
+    has_wine_stable = _find_wine_stable() is not None
+    has_wine_staging = _find_wine_staging() is not None
+    wine_version = _get_wine_version()
     return {
         "has_tools": has_tools,
-        "has_wine": _find_wine() is not None,
+        "has_wine": has_wine_stable or has_wine_staging,
+        "has_wine_stable": has_wine_stable,
+        "has_wine_staging": has_wine_staging,
         "has_mesa": _mesa_available(),
         "has_dxvk64": _dxvk_available(),
         "has_dxvk32": has_dxvk32,
-        "has_gptk_full": _gptk_full_available(),
-        "has_d3dmetal3": _d3dmetal3_available(),
+        "has_gptk_full": _dxmt_available(),
+        "has_d3dmetal3": _gptk_available(),
         "has_gptk": _gptk_available(),
+        "wine_version": wine_version,
     }
 
 
@@ -1849,6 +1948,76 @@ def cmd_get_steam_running(_params: Dict[str, Any]) -> Any:
     return {"running": running}
 
 # ---------------------------------------------------------------------------
+# Installer job management
+# ---------------------------------------------------------------------------
+
+_install_jobs: Dict[str, Dict] = {}
+
+def cmd_run_installer(params: Dict[str, Any]) -> Any:
+    actions: List[str] = params.get("actions", [])
+    installer_path: str = params.get("installer_path", "")
+    prefix: str = params.get("prefix", "")
+    dxvk_src: str = params.get("dxvk_src", "")
+    dxvk64: str = params.get("dxvk64", "")
+    dxvk32: str = params.get("dxvk32", "")
+    mesa: str = params.get("mesa", "")
+    mesa_url: str = params.get("mesa_url", "")
+    dxmt: str = params.get("dxmt", "")
+    vkd3d: str = params.get("vkd3d", "")
+
+    import uuid
+    job_id = str(uuid.uuid4())
+    job: Dict[str, Any] = {"lines": [], "done": False, "failed": False, "current": ""}
+    _install_jobs[job_id] = job
+
+    def _run() -> None:
+        env = {**os.environ, "MNC_SUDOLESS": "1"}
+        for action in actions:
+            job["current"] = action
+            job["lines"].append(f"=== {action} ===")
+            try:
+                proc = subprocess.Popen(
+                    [installer_path, action, prefix, dxvk_src, dxvk64, dxvk32, mesa, mesa_url, dxmt, "", vkd3d],
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    job["lines"].append(line.rstrip())
+                proc.wait()
+                if proc.returncode != 0:
+                    job["lines"].append(f"!!! {action} failed (exit {proc.returncode})")
+                    job["failed"] = True
+            except Exception as exc:
+                job["lines"].append(f"!!! {action} error: {exc}")
+                job["failed"] = True
+        job["lines"].append("=== Done! ===")
+        job["done"] = True
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return {"job_id": job_id}
+
+
+def cmd_get_install_progress(params: Dict[str, Any]) -> Any:
+    job_id: str = params.get("job_id", "")
+    offset: int = params.get("offset", 0)
+    job = _install_jobs.get(job_id)
+    if job is None:
+        return {"lines": [], "total_lines": 0, "done": True, "failed": False, "current": ""}
+    lines = job["lines"]
+    new_lines = lines[offset:]
+    return {
+        "lines": new_lines,
+        "total_lines": len(lines),
+        "done": job["done"],
+        "failed": job.get("failed", False),
+        "current": job.get("current", ""),
+    }
+
+# ---------------------------------------------------------------------------
 # Command dispatch table
 # ---------------------------------------------------------------------------
 
@@ -1871,12 +2040,15 @@ COMMANDS: Dict[str, Any] = {
     "detect_exes": cmd_detect_exes,
     "list_backends": cmd_list_backends,
     "get_components_status": cmd_get_components_status,
+    "get_update_info": cmd_get_update_info,
     "get_running_games": cmd_get_running_games,
     "get_steam_running": cmd_get_steam_running,
     "get_setup_pid": cmd_get_setup_pid,
     "reorder_bottles": cmd_reorder_bottles,
     "launch_launcher": cmd_launch_launcher,
     "get_exe_icon": cmd_get_exe_icon,
+    "run_installer": cmd_run_installer,
+    "get_install_progress": cmd_get_install_progress,
 }
 
 # ---------------------------------------------------------------------------

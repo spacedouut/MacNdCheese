@@ -15,6 +15,7 @@ struct GameLaunchSheet: View {
     @State private var availableBackends: [GraphicsBackend] = []
     @State private var loadingBackends = true
     @State private var retinaMode: Bool = NSScreen.main.map { $0.backingScaleFactor > 1.0 } ?? false
+    @State private var metalHud: Bool = false
     @State private var enableEsync: Bool = true
     @State private var enableMsync: Bool = true
 
@@ -133,6 +134,11 @@ struct GameLaunchSheet: View {
                         .foregroundStyle(.secondary)
                 }
 
+                // Metal HUD
+                Toggle(isOn: $metalHud) {
+                    Text("Metal HUD")
+                        .font(.caption)
+                        .fontWeight(.semibold)
                 // Synchronization
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Synchronization:")
