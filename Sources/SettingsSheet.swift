@@ -578,6 +578,7 @@ struct SetupSettingsTab: View {
                 mesa: mesaDir,
                 mesaUrl: mesaUrl,
                 dxmt: dxmtDir,
+                metalHud: metalHud
                 vkd3d: vkd3dDir
             ) else {
                 isRunning = false
