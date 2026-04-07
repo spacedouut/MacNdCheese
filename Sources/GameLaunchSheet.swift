@@ -15,6 +15,7 @@ struct GameLaunchSheet: View {
     @State private var availableBackends: [GraphicsBackend] = []
     @State private var loadingBackends = true
     @State private var retinaMode: Bool = NSScreen.main.map { $0.backingScaleFactor > 1.0 } ?? false
+    @State private var metalHud: Bool = false
 
     private var effectiveExe: String {
         if !selectedExe.isEmpty { return selectedExe }
@@ -131,6 +132,13 @@ struct GameLaunchSheet: View {
                         .foregroundStyle(.secondary)
                 }
 
+                // Metal HUD
+                Toggle(isOn: $metalHud) {
+                    Text("Metal HUD")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                }
+
                 Spacer()
 
                 // Buttons
@@ -197,7 +205,7 @@ struct GameLaunchSheet: View {
         guard !exe.isEmpty else { return }
         isLaunching = true
         Task {
-            await backend.launchGame(prefix: prefix, exe: exe, args: extraArgs, backend: selectedBackend, installDir: game.installDir, retinaMode: retinaMode)
+            await backend.launchGame(prefix: prefix, exe: exe, args: extraArgs, backend: selectedBackend, installDir: game.installDir, retinaMode: retinaMode, metalHud: metalHud)
             isLaunching = false
             dismiss()
         }

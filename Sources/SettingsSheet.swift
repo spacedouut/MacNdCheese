@@ -58,6 +58,7 @@ struct BottleSettingsTab: View {
     @State private var bottleName = ""
     @State private var launcherExe = ""
     @State private var iconPath = ""
+    @State private var wineBinary = "auto"
     @State private var isInitializing = false
     @State private var isCleaning = false
 
@@ -103,6 +104,16 @@ struct BottleSettingsTab: View {
                                 .onSubmit { saveBottleConfig() }
                             Button("Browse") { browseIcon() }
                         }
+                    }
+
+                    // Wine version
+                    SettingsRow(label: "Wine") {
+                        Picker("", selection: $wineBinary) {
+                            Text("Auto (prefer Stable)").tag("auto")
+                            Text("Stable").tag("stable")
+                            Text("Staging").tag("staging")
+                        }
+                        .labelsHidden()
                     }
 
                     Divider()
@@ -201,6 +212,7 @@ struct BottleSettingsTab: View {
             bottleName = bottle.name
             launcherExe = bottle.launcherExe ?? ""
             iconPath = bottle.iconPath ?? ""
+            wineBinary = bottle.wineBinary ?? "auto"
         }
     }
 
@@ -211,6 +223,7 @@ struct BottleSettingsTab: View {
                 "name": bottleName,
                 "launcher_exe": launcherExe,
                 "icon_path": iconPath,
+                "wine_binary": wineBinary,
             ])
         }
     }
@@ -322,28 +335,44 @@ struct PathRow: View {
 struct SetupSettingsTab: View {
     @EnvironmentObject var backend: BackendClient
     @State private var isRunning = false
-    @State private var runningAction = ""
     @State private var isLoadingStatus = false
 
     // Current toggle selections
     @State private var installTools = false
-    @State private var installWine = false
+    @State private var installWineStable = false
+    @State private var installWineStaging = false
     @State private var installMesa = false
     @State private var buildDxvk = false
-    @State private var buildDxvk32 = false
     @State private var installVkd3d = false
     @State private var installD3dMetal = false
     @State private var installGptkFull = false
 
     // Baseline installed state (used to detect installs vs uninstalls)
     @State private var wasTools = false
-    @State private var wasWine = false
+    @State private var wasWineStable = false
+    @State private var wasWineStaging = false
     @State private var wasMesa = false
     @State private var wasDxvk = false
-    @State private var wasDxvk32 = false
     @State private var wasVkd3d = false
     @State private var wasD3dMetal = false
     @State private var wasGptkFull = false
+
+    // Update availability per component
+    @State private var toolsHasUpdate = false
+    @State private var wineStableHasUpdate = false
+    @State private var wineStagingHasUpdate = false
+    @State private var stagingLatestName: String? = nil
+    @State private var dxmtHasUpdate = false
+    @State private var dxmtLatestName: String? = nil
+
+    // Install progress
+    @State private var installJobId: String? = nil
+    @State private var installLogLines: [String] = []
+    @State private var installLogOffset: Int = 0
+    @State private var installCurrentAction: String = ""
+    @State private var installDone: Bool = false
+    @State private var installFailed: Bool = false
+    @State private var pollTask: Task<Void, Never>? = nil
 
     var body: some View {
         ScrollView {
@@ -351,54 +380,105 @@ struct SetupSettingsTab: View {
                 GroupBox("Quick Setup") {
                     HStack(spacing: 12) {
                         Button("Minimal") {
-                            installTools = true; installWine = true
-                            buildDxvk = true; buildDxvk32 = true; installMesa = true
+                            installTools = true; installWineStable = true
+                            buildDxvk = true; installMesa = true
                         }
                         .buttonStyle(.bordered)
-                        .help("Select: Tools, Wine, DXVK (64/32), Mesa")
+                        .help("Select: Tools, Wine Stable, DXVK (64/32), Mesa")
+                        .disabled(isRunning)
                         Button("Everything") {
-                            installTools = true; installWine = true
-                            installMesa = true; buildDxvk = true; buildDxvk32 = true
+                            installTools = true; installWineStable = true; installWineStaging = true
+                            installMesa = true; buildDxvk = true
                             installVkd3d = true; installD3dMetal = true; installGptkFull = true
                         }
                         .buttonStyle(.bordered)
                         .help("Select all components")
+                        .disabled(isRunning)
                         Button("None") {
-                            installTools = false; installWine = false
-                            installMesa = false; buildDxvk = false; buildDxvk32 = false
+                            installTools = false; installWineStable = false; installWineStaging = false
+                            installMesa = false; buildDxvk = false
                             installVkd3d = false; installD3dMetal = false; installGptkFull = false
                         }
                         .buttonStyle(.bordered)
+                        .disabled(isRunning)
                     }
                     .padding(8)
                 }
 
                 GroupBox("Components") {
                     VStack(alignment: .leading, spacing: 8) {
-                        ComponentToggleRow("Tools (git, 7z, winetricks)", isOn: $installTools, installed: wasTools)
-                        ComponentToggleRow("Wine", isOn: $installWine, installed: wasWine)
+                        ComponentToggleRow("Tools (git, 7z, winetricks)", isOn: $installTools,
+                                          installed: wasTools, updateAvailable: toolsHasUpdate)
+                            .disabled(isRunning)
+                        ComponentToggleRow("Wine (Stable)", isOn: $installWineStable,
+                                          installed: wasWineStable, updateAvailable: wineStableHasUpdate)
+                            .disabled(isRunning)
+                        ComponentToggleRow(stagingLatestName.map { "Wine (Staging — \($0))" } ?? "Wine (Staging)",
+                                          isOn: $installWineStaging,
+                                          installed: wasWineStaging, updateAvailable: wineStagingHasUpdate)
+                            .disabled(isRunning)
                         ComponentToggleRow("Mesa", isOn: $installMesa, installed: wasMesa)
-                        ComponentToggleRow("DXVK (64-bit)", isOn: $buildDxvk, installed: wasDxvk)
-                        ComponentToggleRow("DXVK (32-bit)", isOn: $buildDxvk32, installed: wasDxvk32)
+                            .disabled(isRunning)
+                        ComponentToggleRow("DXVK", isOn: $buildDxvk, installed: wasDxvk)
+                            .disabled(isRunning)
                         Divider()
                         ComponentToggleRow("VKD3D-Proton", isOn: $installVkd3d, installed: wasVkd3d)
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(.orange).disabled(isRunning)
                         ComponentToggleRow("D3DMetal (GPTK DLLs)", isOn: $installD3dMetal, installed: wasD3dMetal)
-                            .foregroundStyle(.cyan)
-                        ComponentToggleRow("GPTK Full (Experimental)", isOn: $installGptkFull, installed: wasGptkFull)
-                            .foregroundStyle(.yellow)
+                            .foregroundStyle(.cyan).disabled(isRunning)
+                        ComponentToggleRow(dxmtLatestName.map { "DXMT (\($0))" } ?? "DXMT",
+                                          isOn: $installGptkFull, installed: wasGptkFull, updateAvailable: dxmtHasUpdate)
+                            .disabled(isRunning)
                     }
                     .padding(8)
+                }
+
+                // Progress / log area
+                if isRunning || installDone {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            if isRunning {
+                                ProgressView().controlSize(.small)
+                            } else if installFailed {
+                                Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
+                            } else {
+                                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                            }
+                            Text(isRunning
+                                 ? (installCurrentAction.isEmpty ? "Starting…" : installCurrentAction)
+                                 : (installFailed ? "Finished with errors" : "Done!"))
+                                .font(.caption)
+                                .foregroundColor(isRunning ? .secondary : (installFailed ? .red : .green))
+                            Spacer()
+                            if installDone {
+                                Button("Dismiss") { clearInstallState() }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                            }
+                        }
+
+                        ScrollViewReader { proxy in
+                            ScrollView {
+                                Text(installLogLines.joined(separator: "\n"))
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .textSelection(.enabled)
+                                    .id("logBottom")
+                            }
+                            .frame(height: 140)
+                            .background(.black.opacity(0.25))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .onChange(of: installLogLines) {
+                                proxy.scrollTo("logBottom", anchor: .bottom)
+                            }
+                        }
+                    }
                 }
 
                 HStack {
                     if isLoadingStatus {
                         ProgressView().controlSize(.small)
-                        Text("Checking components...")
-                            .font(.caption).foregroundStyle(.secondary)
-                    } else if isRunning {
-                        ProgressView().controlSize(.small)
-                        Text(runningAction)
+                        Text("Checking components…")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -413,32 +493,48 @@ struct SetupSettingsTab: View {
         .onAppear { loadComponentStatus() }
     }
 
+    private func clearInstallState() {
+        installJobId = nil
+        installLogLines = []
+        installLogOffset = 0
+        installCurrentAction = ""
+        installDone = false
+        installFailed = false
+    }
+
     private func loadComponentStatus() {
         isLoadingStatus = true
         Task {
             if let status = await backend.getComponentsStatus() {
-                wasTools = status.hasTools;    installTools = status.hasTools
-                wasWine = status.hasWine;      installWine = status.hasWine
-                wasMesa = status.hasMesa;      installMesa = status.hasMesa
-                wasDxvk = status.hasDxvk64;    buildDxvk = status.hasDxvk64
-                wasDxvk32 = status.hasDxvk32;  buildDxvk32 = status.hasDxvk32
-                wasVkd3d = status.hasGptk;     installVkd3d = status.hasGptk
-                wasD3dMetal = status.hasD3dMetal3; installD3dMetal = status.hasD3dMetal3
-                wasGptkFull = status.hasGptkFull;  installGptkFull = status.hasGptkFull
+                wasTools = status.hasTools;           installTools = status.hasTools
+                wasWineStable = status.hasWineStable; installWineStable = status.hasWineStable
+                wasWineStaging = status.hasWineStaging; installWineStaging = status.hasWineStaging
+                wasMesa = status.hasMesa;             installMesa = status.hasMesa
+                wasDxvk = status.hasDxvk64;           buildDxvk = status.hasDxvk64
+                wasVkd3d = status.hasGptk;            installVkd3d = status.hasGptk
+                wasD3dMetal = status.hasD3dMetal3;    installD3dMetal = status.hasD3dMetal3
+                wasGptkFull = status.hasGptkFull;     installGptkFull = status.hasGptkFull
             }
             isLoadingStatus = false
+
+            // Check for updates in background (network call)
+            if let info = await backend.getUpdateInfo() {
+                toolsHasUpdate = info.toolsUpdateAvailable
+                wineStableHasUpdate = info.wineStableUpdateAvailable
+                wineStagingHasUpdate = info.wineStagingUpdateAvailable
+                stagingLatestName = info.gcenxLatestName
+                dxmtHasUpdate = info.dxmtUpdateAvailable
+                dxmtLatestName = info.dxmtLatestName
+            }
         }
     }
 
     private func runUpdate() {
-        isRunning = true
-        runningAction = "Preparing..."
-
         let home = NSHomeDirectory()
         let resourcePath = Bundle.main.resourcePath ?? Bundle.main.bundlePath
         let candidates = [resourcePath + "/installer.sh", home + "/macndcheese/installer.sh"]
         guard let installerPath = candidates.first(where: { FileManager.default.fileExists(atPath: $0) }) else {
-            runningAction = "installer.sh not found"; isRunning = false; return
+            return
         }
 
         let prefix = backend.activePrefix ?? home + "/wined"
@@ -450,70 +546,63 @@ struct SetupSettingsTab: View {
         let dxmtDir = home + "/dxmt"
         let vkd3dDir = home + "/vkd3d-proton"
 
-        // selected → install/update; deselected + was installed → uninstall
         var uninstallActions: [String] = []
         var installActions: [String] = []
         func plan(_ on: Bool, _ was: Bool, install: String, uninstall: String) {
             if on { installActions.append(install) }
             else if was { uninstallActions.append(uninstall) }
         }
-        plan(installTools,    wasTools,    install: "install_tools",     uninstall: "uninstall_tools")
-        plan(installWine,     wasWine,     install: "install_wine",      uninstall: "uninstall_wine")
-        plan(installMesa,     wasMesa,     install: "install_mesa",      uninstall: "uninstall_mesa")
-        plan(buildDxvk,       wasDxvk,     install: "install_dxvk",      uninstall: "uninstall_dxvk")
-        plan(buildDxvk32,     wasDxvk32,   install: "install_dxvk32",    uninstall: "uninstall_dxvk32")
-        plan(installVkd3d,    wasVkd3d,    install: "install_vkd3d",     uninstall: "uninstall_vkd3d")
-        plan(installD3dMetal, wasD3dMetal, install: "install_gptk_dlls", uninstall: "uninstall_d3dmetal")
-        plan(installGptkFull, wasGptkFull, install: "install_dxmt",      uninstall: "uninstall_dxmt")
+        plan(installTools,       wasTools,       install: "install_tools",        uninstall: "uninstall_tools")
+        plan(installWineStable,  wasWineStable,  install: "install_wine",         uninstall: "uninstall_wine")
+        plan(installWineStaging, wasWineStaging, install: "install_wine_staging", uninstall: "uninstall_wine_staging")
+        plan(installMesa,        wasMesa,        install: "install_mesa",         uninstall: "uninstall_mesa")
+        plan(buildDxvk,          wasDxvk,        install: "install_dxvk",         uninstall: "uninstall_dxvk")
+        plan(installVkd3d,       wasVkd3d,       install: "install_vkd3d",        uninstall: "uninstall_vkd3d")
+        plan(installD3dMetal,    wasD3dMetal,    install: "install_gptk_dlls",    uninstall: "uninstall_d3dmetal")
+        plan(installGptkFull,    wasGptkFull,    install: "install_dxmt",         uninstall: "uninstall_dxmt")
 
         let allActions = uninstallActions + installActions
-        guard !allActions.isEmpty else {
-            runningAction = "Nothing to do"; isRunning = false; return
-        }
+        guard !allActions.isEmpty else { return }
 
-        let tmpScript = NSTemporaryDirectory() + "macncheese_install.sh"
-        var lines: [String] = [
-            "#!/bin/sh",
-            "export MNC_SUDOLESS=1",
-            "INSTALLER='\(installerPath)'",
-            "PREFIX='\(prefix)'",
-            "DXVK_SRC='\(dxvkSrc)'",
-            "DXVK64='\(dxvkInstall64)'",
-            "DXVK32='\(dxvkInstall32)'",
-            "MESA='\(mesaDir)'",
-            "MESA_URL='\(mesaUrl)'",
-            "DXMT='\(dxmtDir)'",
-            "VKD3D='\(vkd3dDir)'",
-            "",
-        ]
-        for action in allActions {
-            lines.append("echo '=== \(action) ==='")
-            lines.append("\"$INSTALLER\" \(action) \"$PREFIX\" \"$DXVK_SRC\" \"$DXVK64\" \"$DXVK32\" \"$MESA\" \"$MESA_URL\" \"$DXMT\" \"\" \"$VKD3D\" || echo '!!! \(action) failed (continuing) !!!'")
-            lines.append("")
-        }
-        lines.append("echo ''")
-        lines.append("echo '=== Done! You can close this window. ==='")
-        lines.append("read -p 'Press Enter to close...'")
+        clearInstallState()
+        isRunning = true
 
-        do {
-            try lines.joined(separator: "\n").write(toFile: tmpScript, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tmpScript)
-        } catch {
-            runningAction = "Failed to write script: \(error.localizedDescription)"; isRunning = false; return
-        }
+        Task {
+            guard let jobId = await backend.runInstaller(
+                installerPath: installerPath,
+                actions: allActions,
+                prefix: prefix,
+                dxvkSrc: dxvkSrc,
+                dxvk64: dxvkInstall64,
+                dxvk32: dxvkInstall32,
+                mesa: mesaDir,
+                mesaUrl: mesaUrl,
+                dxmt: dxmtDir,
+                vkd3d: vkd3dDir
+            ) else {
+                isRunning = false
+                return
+            }
 
-        let appleScript = "tell application \"Terminal\"\nactivate\ndo script \"\(tmpScript)\"\nend tell"
-        runningAction = "Running in Terminal..."
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        task.arguments = ["-e", appleScript]
-        do { try task.run() } catch {
-            runningAction = "Failed to open Terminal: \(error.localizedDescription)"
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-            isRunning = false; runningAction = ""
-            Task { await backend.loadStatus() }
+            installJobId = jobId
+            // Poll every 500ms until done
+            while true {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard let progress = await backend.getInstallProgress(jobId: jobId, offset: installLogOffset) else {
+                    break
+                }
+                installLogLines.append(contentsOf: progress.lines)
+                installLogOffset = progress.totalLines
+                installCurrentAction = progress.current
+                if progress.done {
+                    installDone = true
+                    installFailed = progress.failed
+                    isRunning = false
+                    await backend.loadStatus()
+                    loadComponentStatus()
+                    break
+                }
+            }
         }
     }
 }
@@ -522,18 +611,27 @@ struct ComponentToggleRow: View {
     let label: String
     @Binding var isOn: Bool
     let installed: Bool
+    var updateAvailable: Bool = false
 
-    init(_ label: String, isOn: Binding<Bool>, installed: Bool) {
+    init(_ label: String, isOn: Binding<Bool>, installed: Bool, updateAvailable: Bool = false) {
         self.label = label
         _isOn = isOn
         self.installed = installed
+        self.updateAvailable = updateAvailable
     }
 
     var body: some View {
         HStack {
             Toggle(label, isOn: $isOn)
             Spacer()
-            if installed {
+            if updateAvailable {
+                Text("Update available")
+                    .font(.caption2)
+                    .foregroundStyle(.yellow)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.yellow.opacity(0.15), in: Capsule())
+            } else if installed {
                 Text("Installed")
                     .font(.caption2)
                     .foregroundStyle(.green)
