@@ -1198,16 +1198,11 @@ def cmd_launch_game(params: Dict[str, Any]) -> Any:
     backend = params.get("backend", "auto")
     install_dir = params.get("install_dir", "")
     retina_mode = params.get("retina_mode", False)
-<<<<<<< discord-rpc
-    metal_hud = params.get("metal_hud", False)
     screen_info = params.get("screen_info", "unknown")
-    bottle_cfg = _load_bottles().get(_resolve_key(prefix), {})
-=======
     bottle_cfg = _load_bottles().get(_resolve_key(prefix or ""), {})
     metal_hud = params.get("metal_hud")
     if metal_hud is None:
         metal_hud = bottle_cfg.get("metal_hud", False)
->>>>>>> main
     esync = params.get("esync")
     if esync is None:
         esync = bottle_cfg.get("game_esync")
@@ -1291,16 +1286,14 @@ def cmd_launch_game(params: Dict[str, Any]) -> Any:
         backend, wine, exe_dir, exe_name, prefix, exe, quoted_args, log_path
     )
 
-<<<<<<< discord-rpc
     # Start rpc-bridge before the game using the same wine/env so they share the same wineserver
     if bottle_cfg.get("discord_rpc", True):
         _rpc_bridge_start(wine, env)
-=======
+
     # Heredoc backends (GPTK, D3DMetal3) set env inside zsh — use bash -c.
     # Other backends rely on inherited env — use bash -lc.
     uses_heredoc = backend in (BACKEND_GPTK, BACKEND_D3DMETAL3)
     shell_args = ["bash", "-c", cmd] if uses_heredoc else ["bash", "-lc", cmd]
->>>>>>> main
 
     log(
         f"Launching [{backend}] esync={env.get('WINEESYNC', '')} "
@@ -1663,11 +1656,8 @@ def cmd_get_bottle_config(params: Dict[str, Any]) -> Any:
     config = dict(bottles.get(key, {}))
     config.setdefault("game_esync", True)
     config.setdefault("game_msync", True)
-<<<<<<< discord-rpc
     config.setdefault("discord_rpc", True)
-=======
     config.setdefault("metal_hud", False)
->>>>>>> main
     return config
 
 
