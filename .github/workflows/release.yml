@@ -1,140 +1,137 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -eu
 
-ARCH_NAME="${1:-local}"
+cd ~/macndcheese
 
-APP_NAME="MacNCheese"
-BUNDLE_ID="com.marcel.macncheese"
-BUILD_VENV=".build-venv"
-PYTHON_BIN="$(command -v python3)"
-PYTHON_PREFIX="$(python3 - <<'PY'
-import sys
-print(sys.base_prefix)
-PY
-)"
+echo "=== MacNCheese SwiftUI App Builder ==="
 
-echo "Using Python: $PYTHON_BIN"
-"$PYTHON_BIN" --version
 
-rm -rf build dist "$BUILD_VENV" "${APP_NAME}.spec" "${APP_NAME}.dmg" "${APP_NAME}-${ARCH_NAME}.dmg"
-mkdir -p assets/icon.iconset
+rm -rf build dist MacNCheese.dmg
+mkdir -p build assets/icon.iconset
 
-if [ ! -f "icon.png" ]; then
-  echo "Missing icon.png in repo root"
-  exit 1
-fi
 
+echo "Creating app icon..."
 file icon.png
 sips -g format icon.png
 
-sips -z 16 16     icon.png --out assets/icon.iconset/icon_16x16.png
-sips -z 32 32     icon.png --out assets/icon.iconset/icon_16x16@2x.png
-sips -z 32 32     icon.png --out assets/icon.iconset/icon_32x32.png
-sips -z 64 64     icon.png --out assets/icon.iconset/icon_32x32@2x.png
-sips -z 128 128   icon.png --out assets/icon.iconset/icon_128x128.png
-sips -z 256 256   icon.png --out assets/icon.iconset/icon_128x128@2x.png
-sips -z 256 256   icon.png --out assets/icon.iconset/icon_256x256.png
-sips -z 512 512   icon.png --out assets/icon.iconset/icon_256x256@2x.png
-sips -z 512 512   icon.png --out assets/icon.iconset/icon_512x512.png
-sips -z 1024 1024 icon.png --out assets/icon.iconset/icon_512x512@2x.png
+sips -z 16 16     icon.png --out assets/icon.iconset/icon_16x16.png      2>/dev/null
+sips -z 32 32     icon.png --out assets/icon.iconset/icon_16x16@2x.png   2>/dev/null
+sips -z 32 32     icon.png --out assets/icon.iconset/icon_32x32.png      2>/dev/null
+sips -z 64 64     icon.png --out assets/icon.iconset/icon_32x32@2x.png   2>/dev/null
+sips -z 128 128   icon.png --out assets/icon.iconset/icon_128x128.png    2>/dev/null
+sips -z 256 256   icon.png --out assets/icon.iconset/icon_128x128@2x.png 2>/dev/null
+sips -z 256 256   icon.png --out assets/icon.iconset/icon_256x256.png    2>/dev/null
+sips -z 512 512   icon.png --out assets/icon.iconset/icon_256x256@2x.png 2>/dev/null
+sips -z 512 512   icon.png --out assets/icon.iconset/icon_512x512.png    2>/dev/null
+sips -z 1024 1024 icon.png --out assets/icon.iconset/icon_512x512@2x.png 2>/dev/null
 
 iconutil -c icns assets/icon.iconset -o assets/MacNCheese.icns
 ls -la assets/MacNCheese.icns
 
-"$PYTHON_BIN" -m venv "$BUILD_VENV"
-source "$BUILD_VENV/bin/activate"
 
-python -c "import platform; print(platform.python_version(), platform.machine())"
-python -m pip install -U pip wheel setuptools
-python -m pip install -U PyQt6 pyinstaller pyobjc-core pyobjc-framework-Quartz pyobjc-framework-Cocoa certifi
+echo ""
+echo "Building Swift executable (release)..."
+cd MacNCheese-SwiftUI
+swift build -c release 2>&1
+SWIFT_BIN="$(swift build -c release --show-bin-path)/MacNCheese"
+echo "Binary: $SWIFT_BIN"
+cd ~/macndcheese
 
-python - <<'PY'
-import Quartz
-import Cocoa
-print("PyObjC frameworks OK")
-PY
 
-chmod +x installer.sh
+echo ""
+echo "Creating .app bundle..."
+APP_ROOT="build/MacNCheese.app"
+CONTENTS="$APP_ROOT/Contents"
+MACOS="$CONTENTS/MacOS"
+RESOURCES="$CONTENTS/Resources"
+mkdir -p "$MACOS" "$RESOURCES"
 
-arch -x86_64 python -m PyInstaller \
-  --noconfirm \
-  --clean \
-  --windowed \
-  --name MacNCheese \
-  --icon assets/MacNCheese.icns \
-  --osx-bundle-identifier com.marcel.macncheese \
-  --add-data "installer.sh:." \
-  --add-data "Steam.png:." \
-  --add-data "Wine.png:." \
-  --add-data "Setting.png:." \
-  --add-data "Add.png:." \
-  MacNdCheeseARM.py
+cp "$SWIFT_BIN" "$MACOS/MacNCheese"
 
-APP_ROOT="dist/MacNCheese.app"
-APP_PLIST="$APP_ROOT/Contents/Info.plist"
-GPTK_ROOT="$APP_ROOT/Contents/gptk"
-GPTK_APP="$GPTK_ROOT/lib/wine/Game Porting Toolkit__dot__app"
+cp assets/MacNCheese.icns "$RESOURCES/MacNCheese.icns"
 
-if [ ! -d "$APP_ROOT" ]; then
-  echo "Build failed: $APP_ROOT not found"
-  exit 1
-fi
+# Copy backend files
+cp backend_server.py "$RESOURCES/backend_server.py"
+cp installer.sh "$RESOURCES/installer.sh"
+chmod +x "$RESOURCES/installer.sh"
 
-/usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string MacNCheese" "$APP_PLIST" 2>/dev/null || true
-plutil -p "$APP_PLIST"
+# Copy image assets
+for img in Steam.png Wine.png Setting.png Add.png icon.png; do
+    if [ -f "$img" ]; then
+        cp "$img" "$RESOURCES/$img"
+    fi
+done
 
-OPENSSL_LIB_DIR="$PYTHON_PREFIX/lib"
 
-if [ -f "$OPENSSL_LIB_DIR/libssl.3.dylib" ] && [ -f "$OPENSSL_LIB_DIR/libcrypto.3.dylib" ]; then
-  rm -f "$APP_ROOT/Contents/Frameworks/libssl.3.dylib" "$APP_ROOT/Contents/Frameworks/libcrypto.3.dylib"
-  cp "$OPENSSL_LIB_DIR/libssl.3.dylib" "$APP_ROOT/Contents/Frameworks/libssl.3.dylib"
-  cp "$OPENSSL_LIB_DIR/libcrypto.3.dylib" "$APP_ROOT/Contents/Frameworks/libcrypto.3.dylib"
-  chmod 755 "$APP_ROOT/Contents/Frameworks/libssl.3.dylib" "$APP_ROOT/Contents/Frameworks/libcrypto.3.dylib"
-else
-  echo "Warning: OpenSSL 3 dylibs not found under $OPENSSL_LIB_DIR"
-fi
+cat > "$CONTENTS/Info.plist" << 'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>MacNCheese</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.marcel.macncheese</string>
+    <key>CFBundleName</key>
+    <string>MacNCheese</string>
+    <key>CFBundleDisplayName</key>
+    <string>MacNCheese</string>
+    <key>CFBundleVersion</key>
+    <string>7.0.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>7.0.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>MacNCheese</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.games</string>
+</dict>
+</plist>
+PLIST
 
-file "$APP_ROOT/Contents/MacOS/MacNCheese" || true
-file "$APP_ROOT/Contents/Frameworks/libssl.3.dylib" || true
-file "$APP_ROOT/Contents/Frameworks/libcrypto.3.dylib" || true
+echo "Info.plist written"
 
-if [ -d "$GPTK_ROOT" ]; then
-  chmod -R u+rwX "$GPTK_ROOT"
-  find "$GPTK_ROOT" -name "*.cstemp" -delete
-  xattr -cr "$GPTK_ROOT"
 
-  while IFS= read -r -d '' f; do
-    /usr/bin/codesign --force --sign - --timestamp=none "$f"
-  done < <(find "$GPTK_ROOT" -type f \( -perm -111 -o -name "*.dylib" -o -name "*.so" \) -print0)
-
-  while IFS= read -r -d '' d; do
-    /usr/bin/codesign --force --sign - --timestamp=none "$d"
-  done < <(find "$GPTK_ROOT" -type d \( -name "*.framework" -o -name "*.app" \) -depth -print0)
-
-  if [ -d "$GPTK_APP" ]; then
-    /usr/bin/codesign --force --deep --sign - --timestamp=none "$GPTK_APP"
-    /usr/bin/codesign --verify --deep --strict --verbose=2 "$GPTK_APP"
-  fi
-fi
-
+echo ""
+echo "Signing..."
 find "$APP_ROOT" -name "*.cstemp" -delete
 xattr -cr "$APP_ROOT"
+
 /usr/bin/codesign --force --deep --sign - --timestamp=none "$APP_ROOT"
-/usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_ROOT"
+/usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_ROOT" 2>&1 || true
 
-create-dmg \
-  --volname "MacNCheese" \
-  --window-pos 200 120 \
-  --window-size 660 400 \
-  --icon-size 128 \
-  --icon "MacNCheese.app" 180 185 \
-  --hide-extension "MacNCheese.app" \
-  --app-drop-link 480 185 \
-  "MacNCheese-${ARCH_NAME}.dmg" \
-  "dist/"
 
-ls -la "$APP_ROOT/Contents/MacOS/" || true
-ls -la "$APP_ROOT/Contents/gptk" || true
-ls -la "MacNCheese-${ARCH_NAME}.dmg"
+echo ""
+echo "Creating DMG..."
+rm -f MacNCheese.dmg
+rm -rf build/dmg_staging
+mkdir -p build/dmg_staging
+cp -R "$APP_ROOT" build/dmg_staging/
+ln -s /Applications build/dmg_staging/Applications
 
-deactivate
+hdiutil create \
+    -volname MacNCheese \
+    -srcfolder build/dmg_staging \
+    -ov \
+    -format UDZO \
+    MacNCheese.dmg
+
+rm -rf build/dmg_staging
+
+
+echo ""
+echo "=== Done ==="
+ls -la "$APP_ROOT/Contents/MacOS/"
+ls -la MacNCheese.dmg
+echo ""
+echo "App:  $APP_ROOT"
+echo "DMG:  MacNCheese.dmg"
