@@ -64,7 +64,7 @@ mkdir -p "$MACOS" "$RESOURCES"
 cp "$SWIFT_BIN" "$MACOS/MacNCheese"
 popd >/dev/null
 
-cp assets/MacNCheese.icns "$RESOURCES/MacNCheese.icns"
+cp icon.icns "$RESOURCES/MacNCheese.icns"
 
 cp backend_server.py "$RESOURCES/backend_server.py"
 cp installer.sh "$RESOURCES/installer.sh"
