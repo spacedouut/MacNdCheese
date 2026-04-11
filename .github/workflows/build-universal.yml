@@ -1,4 +1,4 @@
-name: Build MacNCheese DMG (Intel)
+name: Build MacNCheese DMGs
 
 on:
   workflow_dispatch:
@@ -11,14 +11,25 @@ permissions:
 
 jobs:
   build:
-    name: Build Intel (x86_64)
-    runs-on: macos-latest  # Apple Silicon runner
+    name: Build ${{ matrix.arch }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            artifact_name: MacNCheese-arm64-dmg
+            dmg_name: MacNCheese-arm64.dmg
+          - arch: x86_64
+            artifact_name: MacNCheese-intel-dmg
+            dmg_name: MacNCheese-intel.dmg
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Ensure Rosetta 2
+        if: matrix.arch == 'x86_64'
         run: sudo softwareupdate --install-rosetta --agree-to-license
 
       - name: Set up Python 3.12
@@ -26,21 +37,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install create-dmg
-        run: brew install create-dmg
-
       - name: Make build script executable
-        run: chmod +x .github/workflows/release.yml
+        run: chmod +x .github/scripts/build-macos.sh
 
-      - name: Build Intel DMG
-        run: |
-          arch -x86_64 .github/workflows/release.yml intel
+      - name: Build DMG
+        run: .github/scripts/build-macos.sh ${{ matrix.arch }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MacNCheese-intel-dmg
-          path: MacNCheese-intel.dmg
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.dmg_name }}
           retention-days: 7
 
   release:
@@ -50,14 +57,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download artifact
+      - name: Download arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: MacNCheese-arm64-dmg
+          path: artifacts/arm64
+
+      - name: Download intel artifact
         uses: actions/download-artifact@v4
         with:
           name: MacNCheese-intel-dmg
-          path: artifacts/
+          path: artifacts/intel
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/MacNCheese-intel.dmg
+          files: |
+            artifacts/arm64/MacNCheese-arm64.dmg
+            artifacts/intel/MacNCheese-intel.dmg
           generate_release_notes: true
