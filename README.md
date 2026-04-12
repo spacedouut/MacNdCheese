@@ -87,6 +87,7 @@ Leave it on **Auto** and let the app decide. If you're curious:
 |---|---|
 | **DXVK** | Most DirectX 10/11 games |
 | **VKD3D-Proton** | DirectX 12 games |
+| **GPTK(Launching from steam)** | DirectX 11/12 games|
 | **DXMT** | Experimental DX11 via Metal (bleeding edge) |
 | **Mesa** | Fallback / debugging |
 
