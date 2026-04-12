@@ -39,17 +39,17 @@ That's just macOS being overprotective. Here's how to fix it:
 5. Open the app again — it'll work now 
 
 ### Step 3 — Install everything with one click
-Once the app is open, click the **Install** button. It'll automatically download and set up Wine and all the other stuff it needs. Just wait for it to finish.
+Once the app is open, go to settings setup and everything that there is select it and click install.
 
 ### Step 4 — Install Steam
-Click the **Install Steam** button. The Steam installer will pop up — go through it like normal and log into your Steam account when it asks.
+Click the **Install Steam** / **Run installer** button. The Steam installer will pop up — go through it like normal and log into your Steam account when it asks.
 
->  **To open Steam later**, use the **Steam button at the top of the app**.
+>  **To open Steam later**, go ti settings **Bottles* and scroll down you should see **Run installer**
 
 ### Step 5 — Install & launch your game
 1. Open Steam (top of the app), find your game, and install it
 2. Come back to MacNCheese — your game should appear in the list
-3. Select it and hit **Launch** 🎮
+3. Select it and hit **Launch**. Or you could **Launch from steam** to test our newest implementation **D3DMETAL**(Apples technology)
 
 > **Not sure which backend to pick?** Just leave it on **Auto** — it'll figure it out.
 
