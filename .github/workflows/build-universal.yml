@@ -1,0 +1,77 @@
+name: Build & Release MacNCheese
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: macos-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            dmg: MacNCheese-arm64.dmg
+            artifact: arm64
+          - arch: x86_64
+            dmg: MacNCheese-intel.dmg
+            artifact: intel
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rosetta (for Intel build)
+        if: matrix.arch == 'x86_64'
+        run: sudo softwareupdate --install-rosetta --agree-to-license
+
+      - name: Make build script executable
+        run: chmod +x .github/scripts/build-macos.sh
+
+      - name: Build DMG
+        run: .github/scripts/build-macos.sh ${{ matrix.arch }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.dmg }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download arm64
+        uses: actions/download-artifact@v4
+        with:
+          name: arm64
+          path: out
+
+      - name: Download intel
+        uses: actions/download-artifact@v4
+        with:
+          name: intel
+          path: out
+
+      - name: Generate tag
+        id: tag
+        run: |
+          TAG="auto-$(date +'%Y%m%d-%H%M%S')"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: MacNCheese Build ${{ steps.tag.outputs.tag }}
+          files: |
+            out/MacNCheese-arm64.dmg
+            out/MacNCheese-intel.dmg
+          generate_release_notes: true
